@@ -44,6 +44,11 @@ Index of this file:
 #ifndef IMGUI_DISABLE
 #include "imgui_internal.h"
 
+// OptiScaler: menu localisation. Every Text*/TextColored*/BulletText* call ends
+// up in TextV, so translating the format string here covers the whole family
+// and keeps any printf specifiers intact.
+#include "menu/Localization.h"
+
 // System includes
 #include <stdint.h>     // intptr_t
 
@@ -283,6 +288,13 @@ void ImGui::TextV(const char* fmt, va_list args)
     ImGuiWindow* window = GetCurrentWindow();
     if (window->SkipItems)
         return;
+
+    // OptiScaler: translate the format string before it is expanded, so the
+    // printf specifiers in the table line up with the arguments.
+    const char* localized_fmt = nullptr;
+    const char* localized_fmt_end = nullptr;
+    if (L10N::Lookup(fmt, nullptr, localized_fmt, localized_fmt_end))
+        fmt = localized_fmt;
 
     const char* text, *text_end;
     ImFormatStringToTempBufferV(&text, &text_end, fmt, args);

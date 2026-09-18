@@ -8,6 +8,10 @@
 #include <Config.h>
 #include <menu/menu_common.h>
 
+// Localization: the ImGui hooks only see assembled text, so the strings this
+// panel passes as printf arguments ask for their translation explicitly.
+#include <menu/Localization.h>
+
 #include <imgui/imgui.h>
 
 #include <string>
@@ -154,11 +158,11 @@ void RenderMenu(Config* config, float menuResScale)
             // a frozen frame) -- it only outputs the clean frame. So the cost is real, and saying so
             // stops the reading looking like a bug. Enable Neural Rendering off is what zeroes it.
             const char* runSuffix =
-                !config->DlssNrApplyModel.value_or_default() ? "  (model running, edit hidden)" : "";
+                !config->DlssNrApplyModel.value_or_default() ? L10N::T("  (model running, edit hidden)") : "";
 
             if (ms.has_value())
                 ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "Running%s - %.2f ms per frame%s",
-                                   vulkan ? " natively on Vulkan" : "", ms.value(), runSuffix);
+                                   vulkan ? L10N::T(" natively on Vulkan") : "", ms.value(), runSuffix);
             else if (vulkan)
                 // Measured but not yet read: the first few frames are still in the query ring.
                 ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "Running natively on Vulkan - %llu frames%s",
@@ -476,7 +480,7 @@ void RenderMenu(Config* config, float menuResScale)
                     ImGui::TextColored(ImVec4(0.45f, 0.8f, 0.45f, 1.0f),
                                        "Game exposure %.4f  ->  white point %.2f%s", ex.exposure,
                                        ex.preExposure / ex.exposure * trim,
-                                       ex.offeredNow ? "" : "  (held: absent this frame)");
+                                       ex.offeredNow ? "" : L10N::T("  (held: absent this frame)"));
                 }
                 else
                     ImGui::TextDisabled("Reading the exposure...");
@@ -599,10 +603,13 @@ void RenderMenu(Config* config, float menuResScale)
                                       : config->DlssNrWhitePointScale.value_or_default();
 
                 char lbl[48];
+                // The key keeps its %d: final_check.py asserts the table's
+                // translations carry the same number of conversion specifiers,
+                // so the argument still lines up after substitution.
                 if (editingRow)
-                    snprintf(lbl, sizeof(lbl), "Paper white (editing point %d)", selectedAnchor + 1);
+                    snprintf(lbl, sizeof(lbl), L10N::T("Paper white (editing point %d)"), selectedAnchor + 1);
                 else
-                    snprintf(lbl, sizeof(lbl), "Paper white");
+                    snprintf(lbl, sizeof(lbl), "%s", L10N::T("Paper white"));
 
                 if (ImGui::SliderFloat(lbl, &pw, 0.25f, 2000.0f, "%.2fx", ImGuiSliderFlags_Logarithmic))
                 {
@@ -879,10 +886,13 @@ void RenderMenu(Config* config, float menuResScale)
                         ImGui::SameLine();
 
                         const bool sel = (int) i == selectedAnchor;
+                        // Composed here rather than drawn directly, so the format
+                        // and the trailing marker are translated before the
+                        // substitution -- the ImGui hooks never see either.
                         char row[96];
-                        snprintf(row, sizeof(row), "%s scan %.4f  ->  white %.2f%s",
+                        snprintf(row, sizeof(row), L10N::T("%s scan %.4f  ->  white %.2f%s"),
                                  ((int) i == active && isSource) ? ">" : "  ", anchors[i].scan,
-                                 anchors[i].white, sel ? "   [editing]" : "");
+                                 anchors[i].white, sel ? L10N::T("   [editing]") : "");
 
                         // Click selects the row (slider edits it); click again deselects (slider
                         // returns to the live unanchored point).
@@ -925,8 +935,8 @@ void RenderMenu(Config* config, float menuResScale)
                     if (found.empty())
                     {
                         ImGui::TextDisabled("%s", why != nullptr && why[0] != 0
-                                                      ? why
-                                                      : "nothing matched yet.");
+                                                      ? L10N::T(why)
+                                                      : L10N::T("nothing matched yet."));
                     }
                     else
                     {
@@ -945,7 +955,7 @@ void RenderMenu(Config* config, float menuResScale)
                                                        : ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
                                                "%zu. %s = %.5f  (seen %.5f..%.5f) %s", i + 1,
                                                c.shape.c_str(), c.latest, c.lowest, c.highest,
-                                               c.moves ? "MOVES" : "flat so far");
+                                               c.moves ? L10N::T("MOVES") : L10N::T("flat so far"));
                         }
 
                         ImGui::TextDisabled("Walk from shade into daylight. A real exposure moves.");

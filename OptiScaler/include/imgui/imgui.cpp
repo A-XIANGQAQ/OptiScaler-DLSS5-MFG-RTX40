@@ -1119,6 +1119,12 @@ CODE
 #ifndef IMGUI_DISABLE
 #include "imgui_internal.h"
 
+// OptiScaler: menu localisation. Every label ImGui measures or draws passes
+// through the helpers below, so translating there covers the whole menu without
+// touching any call site. Widget IDs keep using the original English, so
+// translating a label cannot make two controls collide.
+#include "menu/Localization.h"
+
 // System includes
 #include <stdio.h>      // vsnprintf, sscanf, printf
 #include <stdint.h>     // intptr_t
@@ -3701,6 +3707,15 @@ void ImGui::RenderText(ImVec2 pos, const char* text, const char* text_end, bool 
     ImGuiContext& g = *GImGui;
     ImGuiWindow* window = g.CurrentWindow;
 
+    // OptiScaler: swap in the translation, if the table has one.
+    const char* localized_text = nullptr;
+    const char* localized_end = nullptr;
+    if (L10N::Lookup(text, text_end, localized_text, localized_end))
+    {
+        text = localized_text;
+        text_end = localized_end;
+    }
+
     // Hide anything after a '##' string
     const char* text_display_end;
     if (hide_text_after_hash)
@@ -3727,6 +3742,15 @@ void ImGui::RenderTextWrapped(ImVec2 pos, const char* text, const char* text_end
     ImGuiContext& g = *GImGui;
     ImGuiWindow* window = g.CurrentWindow;
 
+    // OptiScaler: swap in the translation, if the table has one.
+    const char* localized_text = nullptr;
+    const char* localized_end = nullptr;
+    if (L10N::Lookup(text, text_end, localized_text, localized_end))
+    {
+        text = localized_text;
+        text_end = localized_end;
+    }
+
     if (!text_end)
         text_end = text + ImStrlen(text); // FIXME-OPT
 
@@ -3745,6 +3769,15 @@ void ImGui::RenderTextWrapped(ImVec2 pos, const char* text, const char* text_end
 // better advantage of the render function taking size into account for coarse clipping.
 void ImGui::RenderTextClippedEx(ImDrawList* draw_list, const ImVec2& pos_min, const ImVec2& pos_max, const char* text, const char* text_display_end, const ImVec2* text_size_if_known, const ImVec2& align, const ImRect* clip_rect)
 {
+    // OptiScaler: swap in the translation, if the table has one.
+    const char* localized_text = nullptr;
+    const char* localized_end = nullptr;
+    if (L10N::Lookup(text, text_display_end, localized_text, localized_end))
+    {
+        text = localized_text;
+        text_display_end = localized_end;
+    }
+
     // Perform CPU side clipping for single clipped element to avoid using scissor state
     ImVec2 pos = pos_min;
     const ImVec2 text_size = text_size_if_known ? *text_size_if_known : CalcTextSize(text, text_display_end, false, 0.0f);
@@ -3773,6 +3806,15 @@ void ImGui::RenderTextClippedEx(ImDrawList* draw_list, const ImVec2& pos_min, co
 
 void ImGui::RenderTextClipped(const ImVec2& pos_min, const ImVec2& pos_max, const char* text, const char* text_end, const ImVec2* text_size_if_known, const ImVec2& align, const ImRect* clip_rect)
 {
+    // OptiScaler: swap in the translation, if the table has one.
+    const char* localized_text = nullptr;
+    const char* localized_end = nullptr;
+    if (L10N::Lookup(text, text_end, localized_text, localized_end))
+    {
+        text = localized_text;
+        text_end = localized_end;
+    }
+
     // Hide anything after a '##' string
     const char* text_display_end = FindRenderedTextEnd(text, text_end);
     const int text_len = (int)(text_display_end - text);
@@ -3792,6 +3834,16 @@ void ImGui::RenderTextClipped(const ImVec2& pos_min, const ImVec2& pos_max, cons
 void ImGui::RenderTextEllipsis(ImDrawList* draw_list, const ImVec2& pos_min, const ImVec2& pos_max, float ellipsis_max_x, const char* text, const char* text_end_full, const ImVec2* text_size_if_known)
 {
     ImGuiContext& g = *GImGui;
+
+    // OptiScaler: swap in the translation, if the table has one.
+    const char* localized_text = nullptr;
+    const char* localized_end = nullptr;
+    if (L10N::Lookup(text, text_end_full, localized_text, localized_end))
+    {
+        text = localized_text;
+        text_end_full = localized_end;
+    }
+
     if (text_end_full == NULL)
         text_end_full = FindRenderedTextEnd(text);
     const ImVec2 text_size = text_size_if_known ? *text_size_if_known : CalcTextSize(text, text_end_full, false, 0.0f);
@@ -6151,6 +6203,16 @@ void ImGui::Render()
 ImVec2 ImGui::CalcTextSize(const char* text, const char* text_end, bool hide_text_after_double_hash, float wrap_width)
 {
     ImGuiContext& g = *GImGui;
+
+    // OptiScaler: measure what will actually be drawn, so the translation and
+    // any text_size the widgets cached from here agree with RenderText*.
+    const char* localized_text = nullptr;
+    const char* localized_end = nullptr;
+    if (L10N::Lookup(text, text_end, localized_text, localized_end))
+    {
+        text = localized_text;
+        text_end = localized_end;
+    }
 
     const char* text_display_end;
     if (hide_text_after_double_hash)

@@ -11,6 +11,8 @@
 
 #include "font/Hack_Compressed.h"
 
+#include "Localization.h"
+
 #include <proxies/XeSS_Proxy.h>
 #include <proxies/XeFG_Proxy.h>
 #include <proxies/FfxApi_Proxy.h>
@@ -1898,7 +1900,7 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                 featurePart = StrFmt(" | %s -> %s %u.%u.%u%s", ApiUpscalerInputName(state.currentInputApiName).c_str(),
                                      currentFeature->ShortName().c_str(), currentFeature->Version().major,
                                      currentFeature->Version().minor, currentFeature->Version().patch,
-                                     usesDx12CompatLayer ? " w/Dx12" : "");
+                                     usesDx12CompatLayer ? L10N::T(" w/Dx12") : "");
             }
 
             if (fg != nullptr && fg->IsActive() && !fg->IsPaused())
@@ -2314,27 +2316,27 @@ void MenuCommon::RenderMainMenuHeaderMessages(RenderMenuContext& ctx)
 
             if (primaryGpu.dlssCapable)
             {
-                ImGui::Text("nvngx_dlss : %s", state.NVNGX_DLSS_Path.has_value() ? "Exists" : "Doesn't Exist");
+                ImGui::Text("nvngx_dlss : %s", state.NVNGX_DLSS_Path.has_value() ? L10N::T("Exists") : L10N::T("Doesn't Exist"));
                 ImGui::SameLine(0.0f, 16.0f);
-                ImGui::Text("nvngx_dlssd : %s", state.NVNGX_DLSSD_Path.has_value() ? "Exists" : "Doesn't Exist");
+                ImGui::Text("nvngx_dlssd : %s", state.NVNGX_DLSSD_Path.has_value() ? L10N::T("Exists") : L10N::T("Doesn't Exist"));
             }
             else
             {
-                ImGui::Text("nvngx.dll: %s", state.nvngxExists ? "Exists" : "Doesn't Exist");
+                ImGui::Text("nvngx.dll: %s", state.nvngxExists ? L10N::T("Exists") : L10N::T("Doesn't Exist"));
                 ImGui::SameLine(0.0f, 16.0f);
-                ImGui::Text("nvngx replacement: %s", state.nvngxReplacement.has_value() ? "Exists" : "Doesn't Exist");
+                ImGui::Text("nvngx replacement: %s", state.nvngxReplacement.has_value() ? L10N::T("Exists") : L10N::T("Doesn't Exist"));
             }
 
             ImGui::Text("libxess: %s",
-                        (state.libxessExists || XeSSProxy::Module() != nullptr) ? "Exists" : "Doesn't Exist");
+                        (state.libxessExists || XeSSProxy::Module() != nullptr) ? L10N::T("Exists") : L10N::T("Doesn't Exist"));
 
-            ImGui::Text("FSR Hooks: %s", state.fsrHooks ? "Exist" : "Don't Exist");
+            ImGui::Text("FSR Hooks: %s", state.fsrHooks ? L10N::T("Exist") : L10N::T("Don't Exist"));
             ImGui::SameLine(0.0f, 16.0f);
-            ImGui::Text("FSR 3.1: %s", FfxApiProxy::Dx12Module() != nullptr ? "Exists" : "Doesn't Exist");
+            ImGui::Text("FSR 3.1: %s", FfxApiProxy::Dx12Module() != nullptr ? L10N::T("Exists") : L10N::T("Doesn't Exist"));
             ImGui::SameLine(0.0f, 16.0f);
-            ImGui::Text("FSR 3.1 SR: %s", FfxApiProxy::Dx12Module_SR() != nullptr ? "Exists" : "Doesn't Exist");
+            ImGui::Text("FSR 3.1 SR: %s", FfxApiProxy::Dx12Module_SR() != nullptr ? L10N::T("Exists") : L10N::T("Doesn't Exist"));
             ImGui::SameLine(0.0f, 16.0f);
-            ImGui::Text("FSR 3.1 FG: %s", FfxApiProxy::Dx12Module_FG() != nullptr ? "Exists" : "Doesn't Exist");
+            ImGui::Text("FSR 3.1 FG: %s", FfxApiProxy::Dx12Module_FG() != nullptr ? L10N::T("Exists") : L10N::T("Doesn't Exist"));
 
             ImGui::Spacing();
         }
@@ -2397,10 +2399,10 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         case DX11:
             ImGui::Text(primaryGpu.name.c_str());
 
-            ImGui::Text("D3D11 %s| %s %d.%d.%d%s", primaryGpu.usesDxvk ? "(DXVK) " : "",
+            ImGui::Text("D3D11 %s| %s %d.%d.%d%s", primaryGpu.usesDxvk ? L10N::T("(DXVK) ") : "",
                         currentFeature->ShortName().c_str(), currentFeature->Version().major,
                         currentFeature->Version().minor, currentFeature->Version().patch,
-                        usesDx12CompatLayer ? " w/Dx12" : "");
+                        usesDx12CompatLayer ? L10N::T(" w/Dx12") : "");
             ImGui::SameLine(0.0f, 6.0f);
             ImGui::Text("| Input: %s", ApiUpscalerInputName(state.currentInputApiName).c_str());
 
@@ -2416,7 +2418,7 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         case DX12:
             ImGui::Text(primaryGpu.name.c_str());
 
-            ImGui::Text("D3D12 %s| %s %d.%d.%d", primaryGpu.usesDxvk ? "(DXVK) " : "",
+            ImGui::Text("D3D12 %s| %s %d.%d.%d", primaryGpu.usesDxvk ? L10N::T("(DXVK) ") : "",
                         currentFeature->ShortName().c_str(), currentFeature->Version().major,
                         currentFeature->Version().minor, currentFeature->Version().patch);
             ImGui::SameLine(0.0f, 6.0f);
@@ -2434,10 +2436,10 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         default:
             ImGui::Text(primaryGpu.name.c_str());
 
-            ImGui::Text("Vulkan %s| %s %d.%d.%d%s", primaryGpu.usesDxvk ? "(DXVK) " : "",
+            ImGui::Text("Vulkan %s| %s %d.%d.%d%s", primaryGpu.usesDxvk ? L10N::T("(DXVK) ") : "",
                         currentFeature->ShortName().c_str(), currentFeature->Version().major,
                         currentFeature->Version().minor, currentFeature->Version().patch,
-                        usesDx12CompatLayer ? " w/Dx12" : "");
+                        usesDx12CompatLayer ? L10N::T(" w/Dx12") : "");
             ImGui::SameLine(0.0f, 6.0f);
             ImGui::Text("| Input: %s", ApiUpscalerInputName(state.currentInputApiName).c_str());
 
@@ -7469,7 +7471,7 @@ void MenuCommon::RenderHudlessResourcesWindow(RenderMenuContext& ctx, ImGuiWindo
                     ImGui::Text("%08x, %s->%s, Count: %llu, %s", (size_t) it->first,
                                 GetSourceString(it->second.captureInfo & 0xFF).c_str(),
                                 GetDispatchString(it->second.captureInfo & 0xFF00).c_str(), it->second.usageCount,
-                                it->second.enabled ? "Active" : "Passive");
+                                it->second.enabled ? L10N::T("Active") : L10N::T("Passive"));
 
                     ImGui::TableSetColumnIndex(1);
 
@@ -7808,13 +7810,42 @@ void MenuCommon::Init(HWND InHwnd, bool isUWP)
         if (Config::Instance()->FontSize.has_value())
             fontSize = Config::Instance()->FontSize.value();
 
+        // Localization: the table has to be read before the atlas is built,
+        // because it is what decides which glyphs get baked. Without a table
+        // this is a no-op and glyphRanges stays null, which ImGui reads as its
+        // usual Latin-1 set.
+        L10N::Initialize();
+
+        const ImWchar* glyphRanges = reinterpret_cast<const ImWchar*>(L10N::GlyphRanges());
+
+        std::string fontPath;
+        bool pickedFontOurselves = false;
+
         if (Config::Instance()->TTFFontPath.has_value())
         {
-            io.FontDefault =
-                atlas->AddFontFromFileTTF(wstring_to_string(Config::Instance()->TTFFontPath.value()).c_str(), fontSize,
-                                          &fontConfig, io.Fonts->GetGlyphRangesDefault());
+            fontPath = wstring_to_string(Config::Instance()->TTFFontPath.value());
         }
-        else
+        else if (L10N::IsLoaded())
+        {
+            fontPath = L10N::SystemFontPath();
+            pickedFontOurselves = true;
+        }
+
+        // CJK glyphs are cramped at the size that suits Latin text.
+        if (pickedFontOurselves && !Config::Instance()->FontSize.has_value())
+            fontSize = 16.0f;
+
+        io.FontDefault = nullptr;
+
+        if (!fontPath.empty())
+        {
+            io.FontDefault = atlas->AddFontFromFileTTF(fontPath.c_str(), fontSize, &fontConfig, glyphRanges);
+
+            if (io.FontDefault != nullptr)
+                LOG_INFO("Localization: menu font set to {}", fontPath);
+        }
+
+        if (io.FontDefault == nullptr)
         {
             io.FontDefault = atlas->AddFontFromMemoryCompressedBase85TTF(hack_compressed_compressed_data_base85,
                                                                          fontSize, &fontConfig);
