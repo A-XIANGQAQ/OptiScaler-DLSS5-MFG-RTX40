@@ -78,6 +78,17 @@ foreach ($d in @("Licenses", "OptiScaler")) {
     Copy-Item "$src\$d" "$stage\$d" -Recurse -Force
 }
 
+# Simplified Chinese localization.
+#
+# These live at the repository root, not in the build output, so the copy above never
+# sees them. zh-CN.txt has to land beside OptiScaler.dll because that is where the DLL
+# looks for it -- and a missing table is not an error, it just leaves the menu English,
+# so a package that drops this file fails silently rather than loudly.
+foreach ($f in @("zh-CN.txt", "README.zh-CN.md")) {
+    if (Test-Path "$root\$f") { Copy-Item "$root\$f" "$stage\$f" -Force }
+    else { Write-Host "missing from the repository root: $f" }
+}
+
 Copy-Item $forwarder "$stage\nvngx.dll_dlssnr.dll" -Force
 
 # Logging on, in the release only.

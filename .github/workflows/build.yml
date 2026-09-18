@@ -143,22 +143,35 @@ jobs:
       # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
       run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}} /verbosity:minimal
       
-    - name: Compress the artifact
+    - name: Package the artifact
+      shell: powershell
       run: |
-        $zipName = "${{ steps.get_version.outputs.filename }}.7z"
-        # The 7z command below strips the directory part of an absolute path, so
-        # every file lands at the archive root -- which is where the DLL expects
-        # zh-CN.txt to sit (it is read from beside the DLL). Keep it that way:
-        # putting the table anywhere but the archive root silently falls back to
-        # the English menu, because a missing table is not an error.
-        7z a -r ${{ github.workspace }}\$zipName ${{ github.workspace }}\x64\Release\a\*.* ${{ github.workspace }}\zh-CN.txt ${{ github.workspace }}\README.zh-CN.md
+        # package_release.ps1 stages an explicit allow-list instead of copying the build
+        # output wholesale. The wholesale copy this replaces had three problems: it
+        # shipped the forwarder's .exp/.lib/.pdb build artifacts, its "*.*" glob skipped
+        # "!! EXTRACT ALL FILES TO GAME FOLDER !!" (no extension means no match), and it
+        # never saw zh-CN.txt because that lives at the repository root rather than in
+        # the build output. The script also refuses to package a build whose ini has
+        # features enabled by default, which is worth keeping.
+        .\package_release.ps1 -Version "${{ steps.get_version.outputs.version }}" -SkipBuild
+
+        $produced = "release\OptiScaler-DLSSNR-${{ steps.get_version.outputs.version }}.zip"
+        if (-not (Test-Path $produced)) {
+            Write-Error "packaging produced no zip at $produced"
+            exit 1
+        }
+
+        # Rename to the asset name the rest of this workflow already uses.
+        $zipName = "${{ steps.get_version.outputs.filename }}.zip"
+        Move-Item $produced $zipName -Force
+        Write-Output "Packaged: $zipName"
 
       continue-on-error: false
         
     - uses: actions/upload-artifact@v7.0.0
       with:
         name: ${{ steps.get_version.outputs.filename }}
-        path: ${{ github.workspace }}\${{ steps.get_version.outputs.filename }}.7z
+        path: ${{ github.workspace }}\${{ steps.get_version.outputs.filename }}.zip
         compression-level: 0
         archive: false
         if-no-files-found: error
@@ -188,7 +201,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: nightly
-        files: ${{ github.workspace }}/${{ steps.get_version.outputs.filename }}.7z
+        files: ${{ github.workspace }}/${{ steps.get_version.outputs.filename }}.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
             
