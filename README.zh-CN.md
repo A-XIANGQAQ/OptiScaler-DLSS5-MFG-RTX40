@@ -1,5 +1,8 @@
 # OptiScaler 中文说明
 
+> **版本 `10.0.0-pre2`** ｜ 上游 `optiscaler/OptiScaler@d94fb15f`（2026-11-07）+ DLSS 神经渲染 + RTX 40 MFG 解锁 + 简体中文
+> 上一版是 `10.0.0-pre1`（基于 2026-09 的 KleberMotta 分支）。这一版把上游 411 个提交全部并了进来。
+
 按 **Insert** 打开菜单，**Page Up** 显示性能叠加层，**Page Down** 切换叠加层样式。
 所有键位都能在菜单最下面的 **Keybinds** 里改。
 
@@ -64,6 +67,54 @@ Vulkan 游戏同理，需要 `ffx_12`／`dlss` 这类走 DX12 互操作的选项
 
 > 顺带一提：性能叠加层里的 `DXVK w/Dx12` 是另一回事，那是 Linux/Proton 下
 > 走 DXVK 且启用了互操作时的显示，不是同一段逻辑。
+
+---
+
+## 一·五、这一版跟上一版差在哪
+
+上一版停在 2026-09 的下游分支，这一版把上游 **411 个提交**（2026-09 → 2026-11）合并了进来。
+菜单整体重做过，所以 90% 的截图对不上了，但功能没少。
+
+### 菜单换了骨架
+
+以前是一个长条列表，现在改成**卡片 + 标签页**：
+
+- 顶部四个标签：**Main**（日常用）／**System**（纹理、兼容性）／**Advanced**（菜单外观、
+  Quirks、状态）／外加一个可以自己拼的 **Custom**
+- 每张卡片右上角有个图钉，钉住之后会出现在 **Custom** 标签页里，你可以只留自己常用的那几张
+- 卡片是空的时候（当前上下文不适用）会自动不画，不再留一堆灰框
+
+### 新增 / 变化的功能
+
+- **XeFG（Intel Xe 帧生成）** 作为 FG Output 的一个新后端，开销最大但兼容性最好
+- **HUDless 资源追踪**：翻了上游的 HUDFix 实现，UI 重影的处理路径变了；
+  `System > Compatibility` 里能看当前判定
+- **插件 SDK**：`plugins/PluginApi.h`，可以写自己的 ASI 插件挂进来（`Load ASI plugins`）
+- **FSR 4 重构**：FSR4 的 preset / 色彩空间选项重新组织过，模型选择下放到 `FFX Settings` 卡片
+- **Vulkan 重构**：`hkvkCreateDevice` 大量重写，加了 FIFO latest-ready 呈现模式检测、
+  `VK_KHR_timeline_semaphore` 判定、DXGI-backed 调用方识别
+- **逐着色器 GPU 耗时**：`Advanced > Status` 里能看到每个 shader 各自花多久
+- **菜单外观**：圆角、背景模糊、模糊强度、阴影强度、字体、字号，都能调
+- **FPS 叠加层**：行内容可选、图表高度、水平/垂直位置、刷新间隔、字距、文字阴影，
+  还能「使用主题」或者「重置外观」
+- **更新检查**：菜单里能直接检查新版本
+
+### 我们这边保住的三块
+
+合并的原则是：上游怎么改都跟，但下面三块是下游独有的，一个字符都不能丢。
+
+| 功能 | 代码位置 | 说明 |
+|---|---|---|
+| **DLSS 神经渲染** | `OptiScaler/dlssnr/` | 上游完全没有这个目录 |
+| **MFG 解锁（RTX 40）** | `OptiScaler/mfgunlock/` | 上游同样没有 |
+| **简体中文** | `OptiScaler/menu/Localization.*` + `zh-CN.txt` | 靠 hook imgui 的文字绘制实现 |
+
+这一版为了跟上新菜单，把两块的入口从「旧版列表里的两次调用」改成了**两个正式卡片**：
+
+- `Upscaling` 标签下的 **Neural Rendering**
+- `Frame Gen` 标签下的 **MFG Unlock (RTX 40)**
+
+两块的设置在 **Custom** 标签页里也能钉住。
 
 ---
 
@@ -220,10 +271,42 @@ Vulkan 游戏同理，需要 `ffx_12`／`dlss` 这类走 DX12 互操作的选项
 
 | 文件 | 说明 |
 |---|---|
-| `nvngx_dlssnr.dll` | NVIDIA 的模型，约 165 MB —— **需要你自备**（来自驱动包） |
-| `nvngx.dll_dlssnr.dll` | 转发器，约 13 KB —— 本安装包自带 |
+| `nvngx_dlssnr.dll` | NVIDIA 的模型，**本包已附带 310.9.16 版**（见下） |
+| `nvngx.dll_dlssnr.dll` | 转发器，约 114 KB —— 本安装包自带 |
 
 **前提**：RTX 50 系显卡（老卡跑不动这个模型）；DX11 游戏需要超分器选 `dlss_12`。
+
+#### 附带的模型版本
+
+本包里的 `nvngx_dlssnr.dll` 是 **310.9.16.0**，NVIDIA 官方签名版本（不是社区重编的）。
+这是目前公开能拿到的最新一版，2026-10 随驱动发布，相对上一版 `310.8.2`：
+
+- 同画质下神经渲染耗时可降约 38%（4080 SUPER 上 8.8ms → 5.4ms）
+- 内含两套模型：`Original` 与 `Optimized FP8`，菜单里的 **Model preset** 就是切这个
+
+校验值（自己核对一下，别装到假的）：
+
+```
+文件名   nvngx_dlssnr.dll
+版本     310.9.16.0
+大小     266,424,944 字节
+SHA-256  2BC19BC09A7B89DD44F73E2AC0108FCC586E2154BDD0830F242F4F040E28789F
+签名     Valid，CN = NVIDIA Corporation
+```
+
+**关于「6.21.14」**：那是 NVIDIA 的**驱动版本号**（621.14 WHQL，2026-11-05），
+不是模型版本。621.14 这个驱动里**没有**再发新模型，它带的还是 10 月那个。
+所以「最新的 DLSS 5 模型」＝ `nvngx_dlssnr.dll 310.9.16`，也就是本包附带的这个。
+
+如果你的卡不是 RTX 50（比如 RTX 20/30/40 想试），官方签名版在非 Blackwell 上跑不起来，
+需要用 openNR 从你自己提的文件重编的 compat-fp16 版：
+
+```
+openNR compat-fp16 版
+大小     276,162,560 字节
+SHA-256  CDFA6C1EC784867182164C7836F324F087B5C9F374D0C9FE46F54999FEABF3ED
+签名     无（自编译，自校验 hash）
+```
 
 菜单里能调：
 

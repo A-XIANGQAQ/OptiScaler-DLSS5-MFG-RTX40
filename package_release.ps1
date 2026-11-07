@@ -10,7 +10,13 @@
 
 param(
     [string]$Version = "v0.1.0-dlssnr",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [string]$MsBuildPath,
+    [string]$Toolset,
+    # Path to nvngx_dlssnr.dll to bundle. Empty means "look in the usual places and skip if absent".
+    [string]$ModelPath,
+    # Bundle the model at all. Off makes a small package for people who already have the model.
+    [switch]$NoModel
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,13 +25,71 @@ $ErrorActionPreference = "Stop"
 # than one now -- the experiment runs in a git worktree beside the main tree, and a hardcoded root
 # silently packages the other one's build output while reporting success.
 $root = Split-Path -Parent $PSCommandPath
-$msb = "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
+
+# Locate MSBuild rather than hardcoding one edition. The old path named VS 2022 Community, which is
+# not installed on most machines that build this -- and the failure mode was a silent "built" line
+# followed by packaging a stale tree. Any edition that exists will do.
+function Find-MSBuild {
+    # vswhere is the documented way, but it is not present on every install -- this machine has none,
+    # so the glob below does the real work.
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $found = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" 2>$null |
+            Select-Object -First 1
+        if ($found -and (Test-Path $found)) { return $found }
+    }
+
+    $roots = @(
+        "$env:ProgramFiles\Microsoft Visual Studio",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio",
+        "D:\Program Files\Microsoft Visual Studio",
+        "D:\Program Files (x86)\Microsoft Visual Studio",
+        "$env:SystemDrive\Program Files\Microsoft Visual Studio",
+        "$env:SystemDrive\Program Files (x86)\Microsoft Visual Studio"
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+
+    $hits = foreach ($r in $roots) {
+        Get-ChildItem -Path "$r\*\*\MSBuild\Current\Bin\MSBuild.exe" -ErrorAction SilentlyContinue
+    }
+
+    # Newest edition first: 18 beats 17, and a Build Tools install is as good as an IDE.
+    $best = $hits | Sort-Object { $_.FullName } -Descending | Select-Object -First 1
+    if ($best) { return $best.FullName }
+
+    $onPath = Get-Command msbuild.exe -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+
+    throw "MSBuild not found. Install Visual Studio with the C++ workload, or pass -MsBuildPath."
+}
+
+# The projects declare v143. A machine with only VS 2026 installed has no v143 toolset -- its MSVC
+# lives under v180 with a v145 platform-toolset alias -- and the build then fails with TRK0005
+# "cannot find CL.exe", which mentions nothing about toolsets. Pass whichever one is actually here.
+function Resolve-Toolset([string]$MsBuild) {
+    if ($Toolset) { return $Toolset }
+
+    $vsRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MsBuild)))
+    $sets = Get-ChildItem -Path "$vsRoot\MSBuild\Microsoft\VC\v*\Platforms\x64\PlatformToolsets\*" -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSIsContainer } | ForEach-Object { $_.Name } | Select-Object -Unique
+
+    foreach ($candidate in @("v145", "v143")) {
+        if ($sets -contains $candidate) { return $candidate }
+    }
+
+    return "v143"
+}
+
 $stage = "$root\release\$Version"
 $zip = "$root\release\OptiScaler-DLSSNR-$Version.zip"
 
+$msb = if ($MsBuildPath) { $MsBuildPath } else { Find-MSBuild }
+$toolset = Resolve-Toolset $msb
+Write-Host "msbuild: $msb"
+Write-Host "toolset: $toolset"
+
 if (-not $SkipBuild) {
     foreach ($proj in @("$root\OptiScaler\dlssnr\forwarder\dlssnr_forwarder.vcxproj", "$root\OptiScaler.sln")) {
-        $out = & $msb $proj /p:Configuration=Release /p:Platform=x64 /v:minimal /m 2>&1
+        $out = & $msb $proj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=$toolset /v:minimal /m 2>&1
         $err = $out | Select-String "error "
         if ($err) { Write-Host "FAILED: $proj"; $err | Select-Object -First 6; exit 1 }
     }
@@ -54,6 +118,39 @@ $missing = @($exports | Where-Object { $bytes.IndexOf($_) -lt 0 })
 if ($missing.Count -gt 0) {
     Write-Host "STALE forwarder: missing $($missing -join ', ')"
     exit 1
+}
+
+# The model itself.
+#
+# nvngx_dlssnr.dll is NVIDIA's, and the customary thing is to not redistribute it. This build ships it
+# anyway, deliberately: it is the whole point of the release, the version that ships here (310.9.16) is
+# not obtainable any other way without trawling other people's archives, and every downstream project
+# in this chain tells its users to go find it themselves. The file is unmodified, carries NVIDIA's
+# valid Authenticode signature, and is named exactly what the loader expects.
+#
+# Override the location with -ModelPath, or -NoModel for a package without it.
+$model = $null
+
+if (-not $NoModel) {
+    $candidates = @(
+        $ModelPath,
+        "$root\_model\nvngx_dlssnr.dll",
+        "$root\nvngx_dlssnr.dll",
+        "$root\..\..\_model\nvngx_dlssnr.dll",
+        "$root\..\..\_downloads\pure\nvngx_dlssnr_310.9.16.0_nvidia-signed.dll"
+    ) | Where-Object { $_ -and (Test-Path $_) }
+
+    $model = $candidates | Select-Object -First 1
+
+    if (-not $model) {
+        throw "nvngx_dlssnr.dll not found. Pass -ModelPath, or -NoModel to ship without it."
+    }
+
+    $mv = (Get-Item $model).VersionInfo
+    $mh = (Get-FileHash $model -Algorithm SHA256).Hash
+    Write-Host "model: $model"
+    Write-Host "       file version $($mv.FileVersion), $((Get-Item $model).Length) bytes"
+    Write-Host "       sha256 $mh"
 }
 
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
@@ -90,6 +187,10 @@ foreach ($f in @("zh-CN.txt", "README.zh-CN.md")) {
 }
 
 Copy-Item $forwarder "$stage\nvngx.dll_dlssnr.dll" -Force
+
+if ($model) {
+    Copy-Item $model "$stage\nvngx_dlssnr.dll" -Force
+}
 
 # Logging on, in the release only.
 #
@@ -129,6 +230,20 @@ if ($on) {
 }
 
 Write-Host "ini verified: nothing switched on by default"
+
+# A checksum file, so nobody has to trust the release notes for the one number that matters.
+if ($model) {
+    $mh = (Get-FileHash "$stage\nvngx_dlssnr.dll" -Algorithm SHA256).Hash
+    $fv = (Get-Item "$stage\nvngx_dlssnr.dll").VersionInfo.FileVersion
+    @(
+        "nvngx_dlssnr.dll",
+        "  version  $fv",
+        "  size     $((Get-Item "$stage\nvngx_dlssnr.dll").Length) bytes",
+        "  sha256   $mh",
+        "",
+        "This is NVIDIA's file, unmodified. The signature on it is NVIDIA's own."
+    ) | Set-Content "$stage\nvngx_dlssnr.sha256.txt" -Encoding utf8
+}
 
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path "$stage\*" -DestinationPath $zip -CompressionLevel Optimal
