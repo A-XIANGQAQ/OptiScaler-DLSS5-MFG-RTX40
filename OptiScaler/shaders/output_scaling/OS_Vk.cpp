@@ -136,10 +136,15 @@ bool OS_Vk::Dispatch(VkCommandBuffer InCmdList, const VkImageInfo& InResourceVie
     const uint32_t srcH = nr ? InResourceView.Height : State::Instance().currentFeature->TargetHeight();
     const uint32_t dstW = nr ? OutResourceView.Width : State::Instance().currentFeature->DisplayWidth();
     const uint32_t dstH = nr ? OutResourceView.Height : State::Instance().currentFeature->DisplayHeight();
+    ScopedGpuTime_Vk scopedGpuTime(GpuTime.get(), InCmdList);
 
     // Update Constants
     FsrEasuCon(fsr1Constants.const0, fsr1Constants.const1, fsr1Constants.const2, fsr1Constants.const3,
                srcW, srcH, srcW, srcH, dstW, dstH);
+
+    // EASU only upscales, downscaling stays on the shader's bilinear path. Derived from the same
+    // sizes the resample above uses, so an NR instance is judged on its own images.
+    fsr1Constants.squaredRadius = srcW < dstW ? UINT32_MAX : 0;
 
     constants.srcWidth = srcW;
     constants.srcHeight = srcH;
@@ -158,8 +163,11 @@ bool OS_Vk::Dispatch(VkCommandBuffer InCmdList, const VkImageInfo& InResourceVie
     _currentSetIndex = (_currentSetIndex + 1) % _maxFramesInFlight;
     VkDescriptorSet currentSet = _descriptorSets[_currentSetIndex];
 
+    const auto bufferInfo = ActiveScaler() == Scaler::FSR1
+                                ? WriteConstants(&fsr1Constants, sizeof(UpscaleShaderConstants))
+                                : WriteConstants(&constants, sizeof(Constants));
+
     // Build Descriptor Writes
-    VkDescriptorBufferInfo bufferInfo { _constantBuffer, 0, sizeof(Constants) };
     VkDescriptorImageInfo sourceInfo { VK_NULL_HANDLE, InResourceView.ImageView,
                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     VkDescriptorImageInfo destInfo { VK_NULL_HANDLE, OutResourceView.ImageView, VK_IMAGE_LAYOUT_GENERAL };

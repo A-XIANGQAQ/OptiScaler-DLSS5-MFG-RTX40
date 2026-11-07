@@ -70,7 +70,7 @@ DEFINE_NAME_VECTORS(blockOverlay, "eosovh-win32-shipping",
                                   "overlay64"
 );
 
-inline std::vector<std::wstring> blockedDllNamesW = { L"windhawk.dll", L"mactype.dll", L"mactype64.dll" };
+inline std::vector<std::wstring> blockedDllNamesW = { L"windhawk.dll", L"mactype.dll", L"mactype64.dll", L"overlayenginex64.dll", L"overlayreleasex64.dll" };
 
 DEFINE_NAME_VECTORS(skipDxgiWrapping, "eosovh-win32-shipping",
                                       "eosovh-win64-shipping",
@@ -135,6 +135,7 @@ DEFINE_NAME_VECTORS(slCommon, "sl.common");
 
 DEFINE_NAME_VECTORS(xess, "libxess");
 DEFINE_NAME_VECTORS(xessDx11, "libxess_dx11");
+DEFINE_NAME_VECTORS(xefg, "libxess_fg");
 
 DEFINE_NAME_VECTORS(fsr2, "ffx_fsr2_api_x64");
 DEFINE_NAME_VECTORS(fsr2BE, "ffx_fsr2_api_dx12_x64");
@@ -148,7 +149,10 @@ DEFINE_NAME_VECTORS(ffxDx12Upscaler, "amd_fidelityfx_upscaler_dx12");
 DEFINE_NAME_VECTORS(ffxDx12FG, "amd_fidelityfx_framegeneration_dx12");
 DEFINE_NAME_VECTORS(ffxDx12Denoiser, "amd_fidelityfx_denoiser_dx12");
 DEFINE_NAME_VECTORS(ffxDx12Radiance, "amd_fidelityfx_radiancecache_dx12");
-DEFINE_NAME_VECTORS(ffxVk, "amd_fidelityfx_vk");
+DEFINE_NAME_VECTORS(ffxVk, "amd_fidelityfx_vk", "amd_fidelityfx_loader_vk");
+DEFINE_NAME_VECTORS(ffxVkLegacy, "amd_fidelityfx_vk");
+DEFINE_NAME_VECTORS(ffxVkUpscaler, "amd_fidelityfx_upscaler_vk");
+DEFINE_NAME_VECTORS(ffxVkFG, "amd_fidelityfx_framegeneration_vk");
 DEFINE_NAME_VECTORS(uell, "main");
 
 inline static bool CompareFileName(std::string* first, std::string* second)
@@ -158,7 +162,9 @@ inline static bool CompareFileName(std::string* first, std::string* second)
 
     auto start = first->size() - second->size();
 
-    bool match = true;
+    if (start > 0 && (*first)[start - 1] != '\\' && (*first)[start - 1] != '/')
+        return false;
+
     for (size_t j = 0; j < second->size(); ++j)
     {
         if (std::tolower(static_cast<unsigned char>((*first)[start + j])) !=
@@ -178,7 +184,9 @@ inline static bool CompareFileNameW(std::wstring* first, std::wstring* second)
 
     auto start = first->size() - second->size();
 
-    bool match = true;
+    if (start > 0 && (*first)[start - 1] != L'\\' && (*first)[start - 1] != L'/')
+        return false;
+
     for (size_t j = 0; j < second->size(); ++j)
     {
         if (std::towlower((*first)[start + j]) != std::towlower((*second)[j]))

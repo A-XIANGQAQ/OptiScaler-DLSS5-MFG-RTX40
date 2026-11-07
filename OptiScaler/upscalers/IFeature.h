@@ -19,6 +19,7 @@ struct InitFlags
     bool AutoExposure;
     bool DepthInverted;
     bool JitteredMV;
+    bool DynamicResolution;
 };
 
 static auto sumOpts(const auto&... opts) -> std::optional<double>
@@ -123,7 +124,7 @@ class IFeature
 
     virtual size_t JitterCount() { return _jitterInfo.size(); }
 
-    virtual void TickFrozenCheck();
+    virtual void TickFrozenCheck(uint32_t presentPerEval = 1);
     virtual bool IsFrozen() { return _featureFrozen; };
     virtual bool UpdateOutputResolution(const NVSDK_NGX_Parameter* InParameters);
     virtual unsigned int DisplayWidth() { return _displayWidth; };
@@ -157,6 +158,7 @@ class IFeature
     virtual bool IsHdr() { return _initFlags.IsHdr; }
     virtual bool JitteredMV() { return _initFlags.JitteredMV; }
     virtual bool LowResMV() { return _initFlags.LowResMV; }
+    virtual bool DynamicResolution() { return _initFlags.DynamicResolution; }
     virtual bool SharpenEnabled() { return _initFlags.SharpenEnabled; }
 
     virtual bool CallsUpscalerEndByItself() { return false; }

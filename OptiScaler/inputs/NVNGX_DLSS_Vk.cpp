@@ -6,14 +6,13 @@
 
 #include "NVNGX_DLSS.h"
 #include <framegen/nvngx/Nvngx_FG.h>
+#include <inputs/FG/Upscaler_Inputs_Vk.h>
 #include "NVNGX_Parameter.h"
 #include "proxies/NVNGX_Proxy.h"
 
 #include "upscalers/FeatureProvider_Vk.h"
 
-#include <upscaler_time/UpscalerTime_Vk.h>
-
-#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan.h>
 #include <ankerl/unordered_dense.h>
 #include <imgui/ImGuiNotify.hpp>
 #include <misc/IdentifyGpu.h>
@@ -21,6 +20,7 @@
 VkInstance vkInstance;
 VkPhysicalDevice vkPD;
 VkDevice vkDevice;
+static std::atomic<bool> _vkDeviceDestroyed { false };
 PFN_vkGetInstanceProcAddr vkGIPA;
 PFN_vkGetDeviceProcAddr vkGDPA;
 
@@ -28,7 +28,7 @@ static ankerl::unordered_dense::map<unsigned int, ContextData<IFeature_Vk>> VkCo
 static int evalCounter = 0;
 static bool shutdown = false;
 static bool _skipInit = false;
-static wchar_t const** paths;
+static NVNGXClients _clients;
 
 class ScopedInitVk
 {
@@ -47,102 +47,10 @@ class ScopedInitVk
 
 static void UpdateInitPaths(NVSDK_NGX_FeatureCommonInfo* InFeatureInfo)
 {
-    State::Instance().NVNGX_FeatureInfo_Paths.clear();
-
-    if (InFeatureInfo != nullptr)
-    {
-        auto exePath = Util::ExePath().remove_filename();
-
-        std::optional<std::filesystem::path> nvngxDlssPath = std::nullopt;
-        std::optional<std::filesystem::path> nvngxDlssDPath = std::nullopt;
-        std::optional<std::filesystem::path> nvngxDlssGPath = std::nullopt;
-
-        // Check DLSS path
-        if (State::Instance().NVNGX_DLSS_Path.has_value())
-        {
-            nvngxDlssPath = std::filesystem::path(State::Instance().NVNGX_DLSS_Path.value());
-        }
-        else
-        {
-            auto path = Util::FindFilePath(exePath, "nvngx_dlss.dll");
-
-            if (path.has_value())
-                nvngxDlssPath = path.value();
-        }
-
-        // Check DLSS-D path
-        if (State::Instance().NVNGX_DLSSD_Path.has_value())
-        {
-            nvngxDlssDPath = std::filesystem::path(State::Instance().NVNGX_DLSSD_Path.value());
-        }
-        else
-        {
-            auto path = Util::FindFilePath(exePath, "nvngx_dlssd.dll");
-
-            if (path.has_value())
-                nvngxDlssDPath = path.value();
-        }
-
-        // Check DLSS-G path
-        if (State::Instance().NVNGX_DLSSG_Path.has_value())
-        {
-            nvngxDlssGPath = std::filesystem::path(State::Instance().NVNGX_DLSSG_Path.value());
-        }
-        else
-        {
-            auto path = Util::FindFilePath(exePath, "nvngx_dlssg.dll");
-
-            if (path.has_value())
-                nvngxDlssGPath = path.value();
-        }
-
-        // Override locations
-        if (Config::Instance()->DLSSFeaturePath.has_value())
-            State::Instance().NVNGX_FeatureInfo_Paths.push_back(Config::Instance()->DLSSFeaturePath.value());
-
-        // If DLSS path is overriden
-        if (Config::Instance()->NVNGX_DLSS_Library.has_value() && nvngxDlssPath.has_value())
-            State::Instance().NVNGX_FeatureInfo_Paths.push_back(nvngxDlssPath.value().parent_path().wstring());
-
-        // OptiDll Path
-        State::Instance().NVNGX_FeatureInfo_Paths.push_back(Config::Instance()->MainDllPath.value());
-
-        // WAR: Doom Ethernal is sending junk data
-        if (InFeatureInfo->PathListInfo.Length < 10)
-        {
-            // Original paths from NVNGX
-            for (size_t i = 0; i < InFeatureInfo->PathListInfo.Length; i++)
-            {
-                const wchar_t* path = InFeatureInfo->PathListInfo.Path[i];
-                State::Instance().NVNGX_FeatureInfo_Paths.push_back(std::wstring(path));
-            }
-        }
-
-        // Exe path
-        State::Instance().NVNGX_FeatureInfo_Paths.push_back(exePath.wstring());
-
-        // If DLSS path is not overriden
-        if (!Config::Instance()->NVNGX_DLSS_Library.has_value() && nvngxDlssPath.has_value())
-            State::Instance().NVNGX_FeatureInfo_Paths.push_back(nvngxDlssPath.value().parent_path().wstring());
-
-        // Add found locations
-        if (nvngxDlssDPath.has_value())
-            State::Instance().NVNGX_FeatureInfo_Paths.push_back(nvngxDlssDPath.value().parent_path().wstring());
-
-        if (nvngxDlssGPath.has_value())
-            State::Instance().NVNGX_FeatureInfo_Paths.push_back(nvngxDlssGPath.value().parent_path().wstring());
-
-        // Build pointer array
-        paths = new const wchar_t*[State::Instance().NVNGX_FeatureInfo_Paths.size()];
-        for (size_t i = 0; i < State::Instance().NVNGX_FeatureInfo_Paths.size(); ++i)
-        {
-            paths[i] = State::Instance().NVNGX_FeatureInfo_Paths[i].c_str();
-            LOG_DEBUG("Feature Path [{}]: {}", i, wstring_to_string(State::Instance().NVNGX_FeatureInfo_Paths[i]));
-        }
-
-        InFeatureInfo->PathListInfo.Path = paths;
-        InFeatureInfo->PathListInfo.Length = (int) State::Instance().NVNGX_FeatureInfo_Paths.size();
-    }
+    // WAR: Doom Ethernal is sending junk data
+    NVSDK_NGX_PathListInfo noPaths {};
+    NVNGXProxy::SetFeaturePaths(InFeatureInfo,
+                                InFeatureInfo->PathListInfo.Length < 10 ? &InFeatureInfo->PathListInfo : &noPaths);
 }
 
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_Ext2(
@@ -151,6 +59,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_Ext2(
     NVSDK_NGX_Version InSDKVersion, const NVSDK_NGX_FeatureCommonInfo* InFeatureInfo)
 {
     LOG_FUNC();
+    _clients.Add(_ReturnAddress());
 
     NVSDK_NGX_FeatureCommonInfo localFeatureInfo = {};
 
@@ -163,7 +72,6 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_Ext2(
     State::Instance().NVNGX_ApplicationId = InApplicationId;
     State::Instance().NVNGX_ApplicationDataPath = std::wstring(InApplicationDataPath);
     State::Instance().NVNGX_Version = InSDKVersion;
-    State::Instance().NVNGX_FeatureInfo = &localFeatureInfo;
     State::Instance().NVNGX_Version = InSDKVersion;
 
     if (Config::Instance()->DLSSEnabled.value_or_default() && !_skipInit)
@@ -189,16 +97,18 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_Ext2(
     if (InFeatureInfo != nullptr && InSDKVersion > 0x0000013)
         State::Instance().NVNGX_Logger = InFeatureInfo->LoggingInfo;
 
-    if (State::Instance().nvngxVkInited && InInstance == vkInstance && InDevice == vkDevice && InPD == vkPD)
-    {
-        LOG_WARN("NVNGX already inited");
-        return NVSDK_NGX_Result_Success;
-    }
-
-    if (State::Instance().activeFgInput == FGInput::NvngxFG)
+    // Streamline initializes NGX for DLSSG with the device the game's DLSS already did
+    if (State::Instance().activeFgNvngx != FGNvngxReplacement::None)
     {
         Nvngx_FG::VULKAN_Init_Ext2(InApplicationId, InApplicationDataPath, InInstance, InPD, InDevice, InGIPA, InGDPA,
                                    InSDKVersion, &localFeatureInfo);
+    }
+
+    if (State::Instance().nvngxVkInited && InInstance == vkInstance && InDevice == vkDevice && InPD == vkPD &&
+        !_vkDeviceDestroyed)
+    {
+        LOG_WARN("NVNGX already inited");
+        return NVSDK_NGX_Result_Success;
     }
 
     LOG_INFO("AppId: {0}", InApplicationId);
@@ -221,6 +131,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_Ext2(
     {
         LOG_INFO("InDevice exist!");
         vkDevice = InDevice;
+        _vkDeviceDestroyed = false;
     }
 
     if (InGDPA)
@@ -247,8 +158,6 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_Ext2(
 
     State::Instance().currentVkDevice = InDevice;
 
-    UpscalerTimeVk::Init(InDevice, InPD);
-
     State::Instance().nvngxVkInited = true;
 
     return NVSDK_NGX_Result_Success;
@@ -261,6 +170,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_Ext(unsigned long long InAp
                                                          const NVSDK_NGX_FeatureCommonInfo* InFeatureInfo)
 {
     LOG_FUNC();
+    _clients.Add(_ReturnAddress());
 
     NVSDK_NGX_FeatureCommonInfo localFeatureInfo = {};
 
@@ -305,6 +215,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_ProjectID_Ext(
     const NVSDK_NGX_FeatureCommonInfo* InFeatureInfo)
 {
     LOG_FUNC();
+    _clients.Add(_ReturnAddress());
 
     NVSDK_NGX_FeatureCommonInfo localFeatureInfo = {};
 
@@ -355,6 +266,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init(unsigned long long InApplic
                                                      NVSDK_NGX_Version InSDKVersion)
 {
     LOG_FUNC();
+    _clients.Add(_ReturnAddress());
 
     NVSDK_NGX_FeatureCommonInfo localFeatureInfo = {};
 
@@ -399,6 +311,7 @@ NVSDK_NGX_VULKAN_Init_ProjectID(const char* InProjectId, NVSDK_NGX_EngineType In
                                 NVSDK_NGX_Version InSDKVersion, const NVSDK_NGX_FeatureCommonInfo* InFeatureInfo)
 {
     LOG_FUNC();
+    _clients.Add(_ReturnAddress());
 
     NVSDK_NGX_FeatureCommonInfo localFeatureInfo = {};
 
@@ -449,7 +362,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_GetParameters(NVSDK_NGX_Paramete
         return NVSDK_NGX_Result_FAIL_InvalidParameter;
 
     if (Config::Instance()->DLSSEnabled.value_or_default() && NVNGXProxy::NVNGXModule() != nullptr &&
-        NVNGXProxy::VULKAN_GetParameters() != nullptr)
+        NVNGXProxy::IsVulkanInited() && NVNGXProxy::VULKAN_GetParameters() != nullptr)
     {
         LOG_INFO("calling NVNGXProxy::VULKAN_GetParameters");
         auto result = NVNGXProxy::VULKAN_GetParameters()(OutParameters);
@@ -517,42 +430,23 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequi
 
         if (FeatureDiscoveryInfo->FeatureID == NVSDK_NGX_Feature_SuperSampling && OutExtensionCount != nullptr)
         {
-            if (OutExtensionProperties == nullptr)
-            {
-                if (Config::Instance()->VulkanExtensionSpoofing.value_or_default())
-                {
-                    LOG_INFO("returning 3 extensions are needed");
-                    *OutExtensionCount = 3;
-                }
-                else
-                {
-                    LOG_INFO("returning no extensions are needed");
-                    *OutExtensionCount = 0;
-                }
-            }
-            else if (*OutExtensionCount == 3 && Config::Instance()->VulkanExtensionSpoofing.value_or_default())
-            {
-                LOG_INFO("returning extension infos");
+            // Returned as a pointer, not copied to the caller like vkEnumerate* does
+            static VkExtensionProperties extensions[] = {
+                { VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
+                  VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_SPEC_VERSION },
+                { VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME,
+                  VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_SPEC_VERSION },
+                { VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME,
+                  VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_SPEC_VERSION },
+            };
 
-                std::memset((*OutExtensionProperties)[0].extensionName, 0,
-                            sizeof(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME));
-                std::strcpy((*OutExtensionProperties)[0].extensionName,
-                            VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-                (*OutExtensionProperties)[0].specVersion = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_SPEC_VERSION;
+            const bool spoof = Config::Instance()->VulkanExtensionSpoofing.value_or_default();
+            *OutExtensionCount = spoof ? static_cast<uint32_t>(std::size(extensions)) : 0;
 
-                std::memset((*OutExtensionProperties)[1].extensionName, 0,
-                            sizeof(VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME));
-                std::strcpy((*OutExtensionProperties)[1].extensionName,
-                            VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
-                (*OutExtensionProperties)[1].specVersion = VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_SPEC_VERSION;
+            if (OutExtensionProperties != nullptr)
+                *OutExtensionProperties = spoof ? extensions : nullptr;
 
-                std::memset((*OutExtensionProperties)[2].extensionName, 0,
-                            sizeof(VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME));
-                std::strcpy((*OutExtensionProperties)[2].extensionName,
-                            VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
-                (*OutExtensionProperties)[2].specVersion = VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_SPEC_VERSION;
-            }
-
+            LOG_INFO("returning {} instance extensions", *OutExtensionCount);
             return NVSDK_NGX_Result_Success;
         }
     }
@@ -609,43 +503,20 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequire
 
         if (FeatureDiscoveryInfo->FeatureID == NVSDK_NGX_Feature_SuperSampling && OutExtensionCount != nullptr)
         {
-            if (OutExtensionProperties == nullptr)
-            {
-                if (Config::Instance()->VulkanExtensionSpoofing.value_or_default())
-                {
-                    LOG_INFO("returning 4 extensions are needed!");
-                    *OutExtensionCount = 4;
-                }
-                else
-                {
-                    LOG_INFO("returning no extensions are needed!");
-                    *OutExtensionCount = 0;
-                }
-            }
-            else if (*OutExtensionCount == 4 && Config::Instance()->VulkanExtensionSpoofing.value_or_default())
-            {
-                LOG_INFO("returning extension infos");
+            // Returned as a pointer, not copied to the caller like vkEnumerate* does
+            static VkExtensionProperties extensions[] = {
+                { VK_NVX_BINARY_IMPORT_EXTENSION_NAME, VK_NVX_BINARY_IMPORT_SPEC_VERSION },
+                { VK_NVX_IMAGE_VIEW_HANDLE_EXTENSION_NAME, VK_NVX_IMAGE_VIEW_HANDLE_SPEC_VERSION },
+                { VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_SPEC_VERSION },
+            };
 
-                std::memset((*OutExtensionProperties)[0].extensionName, 0, sizeof(VK_NVX_BINARY_IMPORT_EXTENSION_NAME));
-                std::strcpy((*OutExtensionProperties)[0].extensionName, VK_NVX_BINARY_IMPORT_EXTENSION_NAME);
-                (*OutExtensionProperties)[0].specVersion = VK_NVX_BINARY_IMPORT_SPEC_VERSION;
+            const bool spoof = Config::Instance()->VulkanExtensionSpoofing.value_or_default();
+            *OutExtensionCount = spoof ? static_cast<uint32_t>(std::size(extensions)) : 0;
 
-                std::memset((*OutExtensionProperties)[1].extensionName, 0,
-                            sizeof(VK_NVX_IMAGE_VIEW_HANDLE_EXTENSION_NAME));
-                std::strcpy((*OutExtensionProperties)[1].extensionName, VK_NVX_IMAGE_VIEW_HANDLE_EXTENSION_NAME);
-                (*OutExtensionProperties)[1].specVersion = VK_NVX_IMAGE_VIEW_HANDLE_SPEC_VERSION;
+            if (OutExtensionProperties != nullptr)
+                *OutExtensionProperties = spoof ? extensions : nullptr;
 
-                std::memset((*OutExtensionProperties)[2].extensionName, 0,
-                            sizeof(VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME));
-                std::strcpy((*OutExtensionProperties)[2].extensionName, VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
-                (*OutExtensionProperties)[2].specVersion = VK_EXT_BUFFER_DEVICE_ADDRESS_SPEC_VERSION;
-
-                std::memset((*OutExtensionProperties)[3].extensionName, 0,
-                            sizeof(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME));
-                std::strcpy((*OutExtensionProperties)[3].extensionName, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
-                (*OutExtensionProperties)[3].specVersion = VK_KHR_PUSH_DESCRIPTOR_SPEC_VERSION;
-            }
-
+            LOG_INFO("returning {} device extensions", *OutExtensionCount);
             return NVSDK_NGX_Result_Success;
         }
     }
@@ -666,8 +537,11 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_AllocateParameters(NVSDK_NGX_Par
 {
     LOG_FUNC();
 
+    if (OutParameters == nullptr)
+        return NVSDK_NGX_Result_FAIL_InvalidParameter;
+
     if (Config::Instance()->DLSSEnabled.value_or_default() && NVNGXProxy::NVNGXModule() != nullptr &&
-        NVNGXProxy::VULKAN_AllocateParameters() != nullptr)
+        NVNGXProxy::IsVulkanInited() && NVNGXProxy::VULKAN_AllocateParameters() != nullptr)
     {
         LOG_INFO("calling NVNGXProxy::VULKAN_AllocateParameters");
         auto result = NVNGXProxy::VULKAN_AllocateParameters()(OutParameters);
@@ -690,15 +564,15 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_GetFeatureRequirements(
     VkInstance VulkanInstance, VkPhysicalDevice PhysicalDevice,
     const NVSDK_NGX_FeatureDiscoveryInfo* FeatureDiscoveryInfo, NVSDK_NGX_FeatureRequirement* OutSupported)
 {
+    if (FeatureDiscoveryInfo == nullptr || OutSupported == nullptr)
+        return NVSDK_NGX_Result_FAIL_InvalidParameter;
+
     LOG_DEBUG("for FeatureID: {0}", (int) FeatureDiscoveryInfo->FeatureID);
 
     if (FeatureDiscoveryInfo->FeatureID == NVSDK_NGX_Feature_SuperSampling ||
         (State::Instance().activeFgInput == FGInput::NvngxFG && Nvngx_FG::isVulkanAvailable() &&
          FeatureDiscoveryInfo->FeatureID == NVSDK_NGX_Feature_FrameGeneration))
     {
-        if (OutSupported == nullptr)
-            OutSupported = new NVSDK_NGX_FeatureRequirement();
-
         OutSupported->FeatureSupported = NVSDK_NGX_FeatureSupportResult_Supported;
         OutSupported->MinHWArchitecture = 0;
 
@@ -710,7 +584,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_GetFeatureRequirements(
     if (Config::Instance()->DLSSEnabled.value_or_default() && NVNGXProxy::NVNGXModule() == nullptr)
         NVNGXProxy::InitNVNGX();
 
-    if (Config::Instance()->DLSSEnabled.value_or_default() && NVNGXProxy::D3D12_GetFeatureRequirements() != nullptr)
+    if (Config::Instance()->DLSSEnabled.value_or_default() && NVNGXProxy::VULKAN_GetFeatureRequirements() != nullptr)
     {
         LOG_DEBUG("calling NVNGXProxy::VULKAN_GetFeatureRequirements");
         auto result = NVNGXProxy::VULKAN_GetFeatureRequirements()(VulkanInstance, PhysicalDevice, FeatureDiscoveryInfo,
@@ -970,7 +844,9 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_ReleaseFeature(NVSDK_NGX_Handle*
         if (deviceContext == State::Instance().currentFeature)
             State::Instance().currentFeature = nullptr;
 
-        vkDeviceWaitIdle(vkDevice);
+        if (auto device = deviceContext->GetDevice(); device != VK_NULL_HANDLE)
+            vkDeviceWaitIdle(device);
+
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         VkContexts[handleId].feature.reset();
@@ -1008,6 +884,30 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_EvaluateFeature(VkCommandBuffer 
     }
 
     auto handleId = InFeatureHandle->Id;
+
+    // Same as D3D12, the DLSSG state shown in the menu comes from the game's own FG evaluations.
+    // Replacements are handled below, so this has to be done before that
+    static size_t evalWithoutFG = 0;
+    static bool fgEvalSeen = false;
+    if (handleId >= NVNGX_PROVIDER_ID_OFFSET)
+    {
+        // Older DLSSG doesn't set the count at all, eval means at least 2x
+        int frameCount = 1;
+        if (InParameters == nullptr ||
+            InParameters->Get("DLSSG.MultiFrameCount", &frameCount) != NVSDK_NGX_Result_Success)
+        {
+            frameCount = 1;
+        }
+        state.dlssgDetectedInterpolationCount = frameCount;
+        evalWithoutFG = 0;
+        fgEvalSeen = true;
+    }
+    else if (fgEvalSeen && ++evalWithoutFG == 6)
+    {
+        // Game stopped evaluating FG, report it as disabled
+        state.dlssgDetectedInterpolationCount = 0;
+    }
+
     if (VkContexts[handleId].feature == nullptr) // prevent source api name flicker when dlssg is active
         state.setInputApiName = state.currentInputApiName;
 
@@ -1069,13 +969,25 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_EvaluateFeature(VkCommandBuffer 
     }
 
     deviceContext = VkContexts[handleId].feature.get();
+
+    if (deviceContext == nullptr)
+    {
+        LOG_DEBUG("trying to use released handle, returning NVSDK_NGX_Result_Success");
+        return NVSDK_NGX_Result_Success;
+    }
+
     state.currentFeature = deviceContext;
 
-    UpscalerTimeVk::UpscaleStart(InCmdList);
+    UpscalerInputsVk::UpscaleStart(InCmdList, InParameters, deviceContext);
+
+    NVSDK_NGX_Resource_VK* output = nullptr;
+    InParameters->Get(NVSDK_NGX_Parameter_Output, (void**) &output);
 
     auto upscaleResult = deviceContext->Evaluate(InCmdList, InParameters);
 
-    if (!upscaleResult)
+    if (upscaleResult)
+        UpscalerInputsVk::UpscaleEnd(InCmdList, output);
+    else
         ImGui::InsertNotification({ ImGuiToastType::Error, 10000, "Upscaler failed to run!" });
 
     if ((!upscaleResult || !deviceContext->IsInited()) &&
@@ -1085,8 +997,6 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_EvaluateFeature(VkCommandBuffer 
         state.changeBackend[handleId] = true;
         return NVSDK_NGX_Result_Success;
     }
-
-    UpscalerTimeVk::UpscaleEnd(InCmdList);
 
     // Same pass, for OptiScaler's own upscalers rather than native DLSS. Natively on Vulkan now: the
     // model exports a complete Vulkan surface and OptiScaler's vkCreateDevice hook already adds the
@@ -1113,6 +1023,9 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_EvaluateFeature(VkCommandBuffer 
 
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Shutdown(void)
 {
+    if (!_clients.Remove(_ReturnAddress()))
+        return NVSDK_NGX_Result_Success;
+
     shutdown = true;
 
     // for (auto const& [key, val] : VkContexts) {
@@ -1149,6 +1062,9 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Shutdown(void)
 
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Shutdown1(VkDevice InDevice)
 {
+    if (!_clients.Remove(_ReturnAddress()))
+        return NVSDK_NGX_Result_Success;
+
     shutdown = true;
 
     if (Config::Instance()->DLSSEnabled.value_or_default() && NVNGXProxy::IsVulkanInited() &&
@@ -1163,4 +1079,12 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Shutdown1(VkDevice InDevice)
     shutdown = false;
 
     return NVSDK_NGX_VULKAN_Shutdown();
+}
+
+void NVNGXVkDeviceDestroyed(VkDevice device)
+{
+    if (vkDevice == device)
+        _vkDeviceDestroyed = true;
+
+    Nvngx_FG::VkDeviceDestroyed(device);
 }

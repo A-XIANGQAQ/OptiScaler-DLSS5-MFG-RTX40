@@ -35,10 +35,10 @@ void HelpMarker(const char* tip)
 
 void RenderMenu(Config* config, float menuResScale)
 {
-    ImGui::Spacing();
-    if (auto ch = ScopedCollapsingHeader("DLSS Multi Frame Generation (RTX 40 unlock)"); ch.IsHeaderOpen())
+    if (ScopedCard::Shows("mfgunlock"))
     {
-        ScopedIndent indent {};
+        ScopedCard card { "DLSS Multi Frame Generation (RTX 40 unlock)" };
+        ScopedID sectionId { "DLSS Multi Frame Generation (RTX 40 unlock)" };
         ImGui::Spacing();
 
         auto& telemetry = GetTelemetry();

@@ -1,6 +1,73 @@
 #include "pch.h"
 #include "Nvngx_DllProxy.h"
 
+#include <misc/DeferredRelease.h>
+
+void Nvngx_DllProxy::LoadNgxExports()
+{
+    _DLSSG_D3D12_Init = (PFN_D3D12_Init) GetProcAddress(dll, "NVSDK_NGX_D3D12_Init");
+    _DLSSG_D3D12_Init_Ext = (PFN_D3D12_Init_Ext) GetProcAddress(dll, "NVSDK_NGX_D3D12_Init_Ext");
+    _DLSSG_D3D12_Shutdown = (PFN_D3D12_Shutdown) GetProcAddress(dll, "NVSDK_NGX_D3D12_Shutdown");
+    _DLSSG_D3D12_Shutdown1 = (PFN_D3D12_Shutdown1) GetProcAddress(dll, "NVSDK_NGX_D3D12_Shutdown1");
+    _DLSSG_D3D12_GetScratchBufferSize =
+        (PFN_D3D12_GetScratchBufferSize) GetProcAddress(dll, "NVSDK_NGX_D3D12_GetScratchBufferSize");
+    _DLSSG_D3D12_CreateFeature = (PFN_D3D12_CreateFeature) GetProcAddress(dll, "NVSDK_NGX_D3D12_CreateFeature");
+    _DLSSG_D3D12_ReleaseFeature = (PFN_D3D12_ReleaseFeature) GetProcAddress(dll, "NVSDK_NGX_D3D12_ReleaseFeature");
+    _DLSSG_D3D12_GetFeatureRequirements =
+        (PFN_D3D12_GetFeatureRequirements) GetProcAddress(dll, "NVSDK_NGX_D3D12_GetFeatureRequirements");
+    _DLSSG_D3D12_EvaluateFeature = (PFN_D3D12_EvaluateFeature) GetProcAddress(dll, "NVSDK_NGX_D3D12_EvaluateFeature");
+    _DLSSG_D3D12_PopulateParameters_Impl =
+        (PFN_D3D12_PopulateParameters_Impl) GetProcAddress(dll, "NVSDK_NGX_D3D12_PopulateParameters_Impl");
+
+    _DLSSG_VULKAN_Init = (PFN_VULKAN_Init) GetProcAddress(dll, "NVSDK_NGX_VULKAN_Init");
+    _DLSSG_VULKAN_Init_Ext = (PFN_VULKAN_Init_Ext) GetProcAddress(dll, "NVSDK_NGX_VULKAN_Init_Ext");
+    _DLSSG_VULKAN_Init_Ext2 = (PFN_VULKAN_Init_Ext2) GetProcAddress(dll, "NVSDK_NGX_VULKAN_Init_Ext2");
+    _DLSSG_VULKAN_Shutdown = (PFN_VULKAN_Shutdown) GetProcAddress(dll, "NVSDK_NGX_VULKAN_Shutdown");
+    _DLSSG_VULKAN_Shutdown1 = (PFN_VULKAN_Shutdown1) GetProcAddress(dll, "NVSDK_NGX_VULKAN_Shutdown1");
+    _DLSSG_VULKAN_GetScratchBufferSize =
+        (PFN_VULKAN_GetScratchBufferSize) GetProcAddress(dll, "NVSDK_NGX_VULKAN_GetScratchBufferSize");
+    _DLSSG_VULKAN_CreateFeature = (PFN_VULKAN_CreateFeature) GetProcAddress(dll, "NVSDK_NGX_VULKAN_CreateFeature");
+    _DLSSG_VULKAN_CreateFeature1 = (PFN_VULKAN_CreateFeature1) GetProcAddress(dll, "NVSDK_NGX_VULKAN_CreateFeature1");
+    _DLSSG_VULKAN_ReleaseFeature = (PFN_VULKAN_ReleaseFeature) GetProcAddress(dll, "NVSDK_NGX_VULKAN_ReleaseFeature");
+    _DLSSG_VULKAN_GetFeatureRequirements =
+        (PFN_VULKAN_GetFeatureRequirements) GetProcAddress(dll, "NVSDK_NGX_VULKAN_GetFeatureRequirements");
+    _DLSSG_VULKAN_EvaluateFeature =
+        (PFN_VULKAN_EvaluateFeature) GetProcAddress(dll, "NVSDK_NGX_VULKAN_EvaluateFeature");
+    _DLSSG_VULKAN_PopulateParameters_Impl =
+        (PFN_VULKAN_PopulateParameters_Impl) GetProcAddress(dll, "NVSDK_NGX_VULKAN_PopulateParameters_Impl");
+}
+
+void Nvngx_DllProxy::QueryReportedParameters()
+{
+    // Both take the same parameters, which aren't tied to an API
+    auto populate = _DLSSG_D3D12_PopulateParameters_Impl != nullptr
+                        ? _DLSSG_D3D12_PopulateParameters_Impl
+                        : (PFN_D3D12_PopulateParameters_Impl) _DLSSG_VULKAN_PopulateParameters_Impl;
+    NVNGX_Parameters params(API::DX12, false);
+
+    if (populate == nullptr || populate(&params) != NVSDK_NGX_Result_Success)
+        return;
+
+    int countMax = 0;
+    if (params.Get("DLSSG.MultiFrameCountMax", &countMax) == NVSDK_NGX_Result_Success && countMax > 0)
+        reportedMaxFakeFrames = countMax;
+
+    if (params.Get("FrameInterpolation.GhostbusterVersionMajor", &antighostingVersion.major) ==
+        NVSDK_NGX_Result_Success)
+    {
+        params.Get("FrameInterpolation.GhostbusterVersionMinor", &antighostingVersion.minor);
+    }
+}
+
+void Nvngx_DllProxy::SetDispatchFlags(NVSDK_NGX_Parameter* InParameters)
+{
+    bool showDebug = Config::Instance()->NvngxFGShowDebug.value_or_default();
+    uint32_t flags = Config::Instance()->NvngxFGDispatchFlags.value_or_default();
+
+    InParameters->Set("DLSSG.ShowDebug", showDebug);
+    InParameters->Set("DLSSG.DispatchFlags", flags);
+}
+
 NVSDK_NGX_Result Nvngx_DllProxy::D3D12_Init(unsigned long long InApplicationId, const wchar_t* InApplicationDataPath,
                                             ID3D12Device* InDevice, const NVSDK_NGX_FeatureCommonInfo* InFeatureInfo,
                                             NVSDK_NGX_Version InSDKVersion)
@@ -58,6 +125,9 @@ NVSDK_NGX_Result Nvngx_DllProxy::D3D12_ReleaseFeature(NVSDK_NGX_Handle* InHandle
 {
     if (isDx12Available())
     {
+        DeferredRelease::Release(depthCopy[0]);
+        DeferredRelease::Release(depthCopy[1]);
+
         return _DLSSG_D3D12_ReleaseFeature(InHandle);
     }
     return NVSDK_NGX_Result_Fail;
@@ -88,8 +158,8 @@ static bool CreateBufferResource(ID3D12Device* device, ID3D12Resource* source, D
         if (bufDesc.Width != inDesc.Width || bufDesc.Height != inDesc.Height || bufDesc.Format != inDesc.Format ||
             bufDesc.Flags != inDesc.Flags)
         {
-            (*target)->Release();
-            (*target) = nullptr;
+            // DLSSG can still be reading it
+            DeferredRelease::Release(*target);
         }
         else
         {
@@ -144,6 +214,9 @@ NVSDK_NGX_Result Nvngx_DllProxy::D3D12_EvaluateFeature(ID3D12GraphicsCommandList
 {
     if (isDx12Available())
     {
+        // Frees deferred objects even when presents aren't hooked
+        DeferredRelease::Collect();
+
         // Make a copy of the depth going to the frame generator
         // Fixes an issue with the depth being corrupted on AMD under Windows
         ID3D12Resource* dlssgDepth = nullptr;
@@ -176,12 +249,13 @@ NVSDK_NGX_Result Nvngx_DllProxy::D3D12_EvaluateFeature(ID3D12GraphicsCommandList
 
             count++;
         }
+        else if (!Config::Instance()->NvngxFGMakeDepthCopy.value_or_default())
+        {
+            DeferredRelease::Release(depthCopy[0]);
+            DeferredRelease::Release(depthCopy[1]);
+        }
 
-        bool showDebug = Config::Instance()->NvngxFGShowDebug.value_or_default();
-        uint32_t flags = Config::Instance()->NvngxFGDispatchFlags.value_or_default();
-
-        InParameters->Set("DLSSG.ShowDebug", showDebug);
-        InParameters->Set("DLSSG.DispatchFlags", flags);
+        SetDispatchFlags(InParameters);
 
         return _DLSSG_D3D12_EvaluateFeature(InCmdList, InFeatureHandle, InParameters, InCallback);
     }
@@ -303,6 +377,8 @@ NVSDK_NGX_Result Nvngx_DllProxy::VULKAN_EvaluateFeature(VkCommandBuffer InCmdLis
 {
     if (isVulkanAvailable())
     {
+        SetDispatchFlags(InParameters);
+
         return _DLSSG_VULKAN_EvaluateFeature(InCmdList, InFeatureHandle, InParameters, InCallback);
     }
 

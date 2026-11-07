@@ -7,12 +7,15 @@
 #include "dxgi1_6.h"
 #include "d3d12.h"
 
+using Microsoft::WRL::ComPtr;
+
 #define USE_LOCAL_MUTEX
 
 class DECLSPEC_UUID("3af622a3-82d0-49cd-994f-cce05122c222") WrappedIDXGISwapChain4 final : public IDXGISwapChain4
 {
   public:
-    WrappedIDXGISwapChain4(IDXGISwapChain* real, IUnknown* pDevice, HWND hWnd, UINT flags, bool isUWP);
+    WrappedIDXGISwapChain4(IDXGISwapChain* real, IUnknown* pDevice, HWND hWnd, UINT flags, bool isUWP,
+                           IUnknown* owner = nullptr);
     virtual ~WrappedIDXGISwapChain4();
 
     // implement IUnknown
@@ -79,6 +82,9 @@ class DECLSPEC_UUID("3af622a3-82d0-49cd-994f-cce05122c222") WrappedIDXGISwapChai
 
   private:
     IDXGISwapChain* _real = nullptr;
+
+    // Object the game got from creation, a Streamline proxy owns the real swapchain
+    IUnknown* _owner = nullptr;
     IDXGISwapChain1* _real1 = nullptr;
     IDXGISwapChain2* _real2 = nullptr;
     IDXGISwapChain3* _real3 = nullptr;
@@ -90,11 +96,30 @@ class DECLSPEC_UUID("3af622a3-82d0-49cd-994f-cce05122c222") WrappedIDXGISwapChai
     UINT _lastFlags = 0;
 
     IUnknown* _device = nullptr;
-    IUnknown* _device2 = nullptr;
 
     HWND _handle = nullptr;
 
 #ifdef USE_LOCAL_MUTEX
     OwnedMutex _localMutex;
 #endif
+
+    void CheckForHdrOutput()
+    {
+        ComPtr<IDXGIOutput> output;
+
+        HRESULT hr = GetContainingOutput(&output);
+        if (SUCCEEDED(hr) && output)
+        {
+            ComPtr<IDXGIOutput6> output6;
+
+            if (SUCCEEDED(output.As(&output6)))
+            {
+                DXGI_OUTPUT_DESC1 desc {};
+                if (SUCCEEDED(output6->GetDesc1(&desc)))
+                {
+                    State::Instance().hdrOutputActive = desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+                }
+            }
+        }
+    }
 };

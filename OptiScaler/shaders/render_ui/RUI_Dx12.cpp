@@ -9,6 +9,8 @@
 
 #include <Config.h>
 
+using Microsoft::WRL::ComPtr;
+
 bool RUI_Dx12::CreateBufferResource(UINT index, ID3D12Device* InDevice, ID3D12Resource* InSource,
                                     D3D12_RESOURCE_STATES InState)
 {
@@ -16,9 +18,10 @@ bool RUI_Dx12::CreateBufferResource(UINT index, ID3D12Device* InDevice, ID3D12Re
 
     auto resourceFlags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
+    auto oldBuffer = _buffer[index];
     auto result = Shader_Dx12::CreateBufferResource(InDevice, InSource, InState, &_buffer[index], resourceFlags);
 
-    if (result)
+    if (result && _buffer[index] != oldBuffer)
     {
         _buffer[index]->SetName(L"RUI_Buffer");
         _bufferState[index] = InState;
@@ -81,9 +84,10 @@ RUI_Dx12::RUI_Dx12(std::string InName, ID3D12Device* InDevice, bool preMultiplie
     D3D12_GRAPHICS_PIPELINE_STATE_DESC graphicsPsoDesc {};
     graphicsPsoDesc.pRootSignature = _rootSignature;
 
+    // render_ui_pm shaders blend straight alpha, render_ui ones premultiplied
     if (Config::Instance()->UsePrecompiledShaders.value_or_default())
     {
-        if (!preMultipliedAlpha)
+        if (preMultipliedAlpha)
         {
             graphicsPsoDesc.VS =
                 CD3DX12_SHADER_BYTECODE(reinterpret_cast<const void*>(render_ui_VS_cso), sizeof(render_ui_VS_cso));
@@ -100,7 +104,7 @@ RUI_Dx12::RUI_Dx12(std::string InName, ID3D12Device* InDevice, bool preMultiplie
     }
     else
     {
-        if (!preMultipliedAlpha)
+        if (preMultipliedAlpha)
         {
             vs = CompileShader(ruiCode.c_str(), "VSMain", "vs_5_1");
             if (vs != nullptr)
@@ -171,7 +175,7 @@ bool RUI_Dx12::Dispatch(IDXGISwapChain3* sc, ID3D12GraphicsCommandList* cmdList,
     }
 
     // Get SwapChain Buffer
-    ID3D12Resource* scBuffer = nullptr;
+    ComPtr<ID3D12Resource> scBuffer;
     auto scIndex = sc->GetCurrentBackBufferIndex();
     auto result = sc->GetBuffer(scIndex, IID_PPV_ARGS(&scBuffer));
 
@@ -180,8 +184,6 @@ bool RUI_Dx12::Dispatch(IDXGISwapChain3* sc, ID3D12GraphicsCommandList* cmdList,
         LOG_ERROR("sc->GetBuffer({}) error: {:X}", scIndex, (unsigned long) result);
         return false;
     }
-
-    scBuffer->Release();
 
     // Check Hudless Buffer
     D3D12_RESOURCE_DESC hudlessDesc = hudless->GetDesc();
@@ -195,7 +197,7 @@ bool RUI_Dx12::Dispatch(IDXGISwapChain3* sc, ID3D12GraphicsCommandList* cmdList,
     _counter++;
     _counter = _counter % HC_NUM_OF_HEAPS;
 
-    if (!CreateBufferResource(_counter, _device, scBuffer, D3D12_RESOURCE_STATE_COPY_DEST))
+    if (!CreateBufferResource(_counter, _device, scBuffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST))
     {
         LOG_ERROR("CreateBufferResource error!");
         return false;
@@ -203,12 +205,12 @@ bool RUI_Dx12::Dispatch(IDXGISwapChain3* sc, ID3D12GraphicsCommandList* cmdList,
 
     // Copy Swapchain Buffer to read buffer
     SetBufferState(_counter, cmdList, D3D12_RESOURCE_STATE_COPY_DEST);
-    ResourceBarrier(cmdList, scBuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    ResourceBarrier(cmdList, scBuffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
 
     if (_buffer[_counter] != nullptr)
-        cmdList->CopyResource(_buffer[_counter], scBuffer);
+        cmdList->CopyResource(_buffer[_counter], scBuffer.Get());
 
-    ResourceBarrier(cmdList, scBuffer, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    ResourceBarrier(cmdList, scBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
     SetBufferState(_counter, cmdList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
     if (state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
@@ -223,7 +225,7 @@ bool RUI_Dx12::Dispatch(IDXGISwapChain3* sc, ID3D12GraphicsCommandList* cmdList,
     // Create views
     CreateShaderResourceView(_device, hudless, currentHeap.GetSrvCPU(0));
     CreateShaderResourceView(_device, _buffer[_counter], currentHeap.GetSrvCPU(1));
-    CreateRenderTargetView(_device, scBuffer, currentHeap.GetRtvCPU(0), 0);
+    CreateRenderTargetView(_device, scBuffer.Get(), currentHeap.GetRtvCPU(0), 0);
 
     ID3D12DescriptorHeap* heaps[] = { currentHeap.GetHeapCSU() };
     cmdList->SetDescriptorHeaps(_countof(heaps), heaps);
@@ -253,7 +255,7 @@ bool RUI_Dx12::Dispatch(IDXGISwapChain3* sc, ID3D12GraphicsCommandList* cmdList,
     cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cmdList->DrawInstanced(3, 1, 0, 0);
 
-    ResourceBarrier(cmdList, scBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    ResourceBarrier(cmdList, scBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 
     if (state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
         ResourceBarrier(cmdList, hudless, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, state);
@@ -263,14 +265,15 @@ bool RUI_Dx12::Dispatch(IDXGISwapChain3* sc, ID3D12GraphicsCommandList* cmdList,
 
 RUI_Dx12::~RUI_Dx12()
 {
-    if (!_init || State::Instance().isShuttingDown)
+    if (State::Instance().isShuttingDown)
         return;
 
-    SAFE_RELEASE(_rootSignature);
-    SAFE_RELEASE(_constantBuffer);
+    DeferredRelease::Release(_rootSignature);
+    DeferredRelease::Release(_constantBuffer);
 
     for (int i = 0; i < HC_NUM_OF_HEAPS; i++)
     {
         _frameHeaps[i].ReleaseHeaps();
+        DeferredRelease::Release(_buffer[i]);
     }
 }

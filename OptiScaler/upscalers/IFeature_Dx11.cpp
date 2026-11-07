@@ -1,6 +1,9 @@
 #include <pch.h>
 #include "IFeature_Dx11.h"
 #include <State.h>
+#include <misc/DeferredRelease.h>
+
+using Microsoft::WRL::ComPtr;
 
 bool IFeature_Dx11::Init(ID3D11Device* InDevice, ID3D11DeviceContext* InContext, NVSDK_NGX_Parameter* InParameters)
 {
@@ -28,7 +31,9 @@ bool IFeature_Dx11::Init(ID3D11Device* InDevice, ID3D11DeviceContext* InContext,
 
         OutputScaler = std::make_unique<OS_Dx11>("Output Scaling", InDevice, (TargetWidth() < DisplayWidth()));
         RCAS = std::make_unique<RCAS_Dx11>("RCAS", InDevice);
-        Bias = std::make_unique<Bias_Dx11>("Bias", InDevice); // TODO: not needed on DLSS/DLSSD
+        // DLSS/DLSSD take the bias mask as is
+        if (GetUpscalerType() != Upscaler::DLSS && GetUpscalerType() != Upscaler::DLSSD)
+            Bias = std::make_unique<Bias_Dx11>("Bias", InDevice);
         Magnifier = std::make_unique<Magnifier_Dx11>("Magnifier", InDevice);
 
         UpscalerTime = std::make_unique<GpuTime_Dx11>(InDevice);
@@ -37,66 +42,58 @@ bool IFeature_Dx11::Init(ID3D11Device* InDevice, ID3D11DeviceContext* InContext,
     return result;
 }
 
-bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Parameter* InParameters)
+bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* InDeviceContext, NVSDK_NGX_Parameter* InParameters)
 {
-    ID3D11ShaderResourceView* restoreSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-    ID3D11SamplerState* restoreSamplerStates[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
-    ID3D11Buffer* restoreCBVs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
-    ID3D11UnorderedAccessView* restoreUAVs[D3D11_1_UAV_SLOT_COUNT] = {};
-    ID3D11RenderTargetView* restoreRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-    ID3D11DepthStencilView* restoreDSV = nullptr;
+    // Frees deferred objects even when presents aren't hooked
+    DeferredRelease::Collect();
+
+    if (!IsInited())
+    {
+        LOG_ERROR("Not inited!");
+        return false;
+    }
+
+    auto result = true;
+
+    ComPtr<ID3D11ShaderResourceView> restoreSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+    ComPtr<ID3D11SamplerState> restoreSamplerStates[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
+    ComPtr<ID3D11Buffer> restoreCBVs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+    ComPtr<ID3D11UnorderedAccessView> restoreUAVs[D3D11_1_UAV_SLOT_COUNT] = {};
+    ComPtr<ID3D11RenderTargetView> restoreRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+    ID3D11RenderTargetView* rawRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+    ComPtr<ID3D11DepthStencilView> restoreDSV = nullptr;
 
     // backup compute shader resources
     for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT; i++)
     {
-        restoreSRVs[i] = nullptr;
-        DeviceContext->CSGetShaderResources(i, 1, &restoreSRVs[i]);
-
-        if (restoreSRVs[i] != nullptr)
-            restoreSRVs[i]->Release();
+        InDeviceContext->CSGetShaderResources(i, 1, restoreSRVs[i].GetAddressOf());
     }
 
     for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
     {
-        restoreSamplerStates[i] = nullptr;
-        DeviceContext->CSGetSamplers(i, 1, &restoreSamplerStates[i]);
-
-        if (restoreSamplerStates[i] != nullptr)
-            restoreSamplerStates[i]->Release();
+        InDeviceContext->CSGetSamplers(i, 1, restoreSamplerStates[i].GetAddressOf());
     }
 
     for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
     {
-        restoreCBVs[i] = nullptr;
-        DeviceContext->CSGetConstantBuffers(i, 1, &restoreCBVs[i]);
-
-        if (restoreCBVs[i] != nullptr)
-            restoreCBVs[i]->Release();
+        InDeviceContext->CSGetConstantBuffers(i, 1, restoreCBVs[i].GetAddressOf());
     }
 
     for (UINT i = 0; i < D3D11_1_UAV_SLOT_COUNT; i++)
     {
-        restoreUAVs[i] = nullptr;
-        DeviceContext->CSGetUnorderedAccessViews(i, 1, &restoreUAVs[i]);
-
-        if (restoreUAVs[i] != nullptr)
-            restoreUAVs[i]->Release();
+        InDeviceContext->CSGetUnorderedAccessViews(i, 1, restoreUAVs[i].GetAddressOf());
     }
 
-    DeviceContext->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, restoreRTVs, &restoreDSV);
+    InDeviceContext->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rawRTVs, restoreDSV.GetAddressOf());
 
-    for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++)
+    for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
     {
-        if (restoreRTVs[i] != nullptr)
-            restoreRTVs[i]->Release();
+        restoreRTVs[i].Attach(rawRTVs[i]);
     }
-
-    if (restoreDSV != nullptr)
-        restoreDSV->Release();
 
     // Unbind RenderTargets
     ID3D11RenderTargetView* nullRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-    DeviceContext->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, nullRTVs, nullptr);
+    InDeviceContext->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, nullRTVs, nullptr);
 
     if (Config::Instance()->OverrideSharpness.value_or_default())
         _sharpness = Config::Instance()->Sharpness.value_or_default();
@@ -162,7 +159,7 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Param
               {
                   LOG_DEBUG("Scaling output...");
 
-                  if (!OutputScaler->Dispatch(Device, DeviceContext, (ID3D11Texture2D*) input,
+                  if (!OutputScaler->Dispatch(Device, InDeviceContext, (ID3D11Texture2D*) input,
                                               (ID3D11Texture2D*) output))
                   {
                       Config::Instance()->OutputScalingEnabled.set_volatile_value(false);
@@ -173,69 +170,71 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Param
               } });
     }
 
-    _actualSharpness = _sharpness;
+    _actualSharpness.reset();
     if (useRcas)
     {
-        pipeline.push_back({ // Setup
-                             [&](ID3D11Resource* nextOutput) -> ID3D11Resource*
-                             {
-                                 // Disable any built-in sharpness shaders
-                                 InParameters->Set(NVSDK_NGX_Parameter_Sharpness, 0.0f);
-                                 _sharpness = 0.0f;
+        pipeline.push_back(
+            { // Setup
+              [&](ID3D11Resource* nextOutput) -> ID3D11Resource*
+              {
+                  // Same checks as Dispatch, a skipped pass must not take over the output
+                  if (paramMotion && paramOutput && RCAS->CreateBufferResource(Device, nextOutput) && RCAS->CanRender())
+                  {
+                      // Disable any built-in sharpness shaders
+                      InParameters->Set(NVSDK_NGX_Parameter_Sharpness, 0.0f);
+                      _actualSharpness = _sharpness;
+                      _sharpness = 0.0f;
 
-                                 if (RCAS->CreateBufferResource(Device, nextOutput))
-                                 {
-                                     return RCAS->Buffer();
-                                 }
-                                 return nullptr;
-                             },
+                      return RCAS->Buffer();
+                  }
+                  return nullptr;
+              },
 
-                             // Dispatch
-                             [&](ID3D11Resource* input, ID3D11Resource* output) -> bool
-                             {
-                                 if (!RCAS->CanRender() || !paramMotion || !paramOutput)
-                                     return true;
+              // Dispatch
+              [&](ID3D11Resource* input, ID3D11Resource* output) -> bool
+              {
+                  if (!RCAS->CanRender() || !paramMotion || !paramOutput)
+                      return true;
 
-                                 RcasConstants rcasConstants {};
+                  RcasConstants rcasConstants {};
 
-                                 rcasConstants.Sharpness = _actualSharpness.value_or(_sharpness);
-                                 rcasConstants.DepthIsLinear = DepthLinear();
-                                 rcasConstants.DepthIsReversed = DepthInverted();
-                                 rcasConstants.IsHdr = IsHdr();
+                  rcasConstants.Sharpness = _actualSharpness.value_or(_sharpness);
+                  rcasConstants.DepthIsLinear = DepthLinear();
+                  rcasConstants.DepthIsReversed = DepthInverted();
+                  rcasConstants.IsHdr = IsHdr();
 
-                                 // Restore value
-                                 _sharpness = _actualSharpness.value_or(_sharpness);
-                                 _actualSharpness.reset();
+                  // Restore value
+                  _sharpness = _actualSharpness.value_or(_sharpness);
+                  _actualSharpness.reset();
 
-                                 InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_X, &rcasConstants.MvScaleX);
-                                 InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &rcasConstants.MvScaleY);
+                  InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_X, &rcasConstants.MvScaleX);
+                  InParameters->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &rcasConstants.MvScaleY);
 
-                                 float nearPlane = 0.0f;
-                                 float farPlane = 0.0f;
+                  float nearPlane = 0.0f;
+                  float farPlane = 0.0f;
 
-                                 // We need camera near and far for DLSSD
-                                 // We passthrough those values from the DLSSG params onto the upscaler's params
-                                 if (InParameters->Get("DLSSG.CameraNear", &nearPlane) == NVSDK_NGX_Result_Success &&
-                                     InParameters->Get("DLSSG.CameraFar", &farPlane) == NVSDK_NGX_Result_Success)
-                                 {
-                                     rcasConstants.CameraNear = nearPlane;
-                                     rcasConstants.CameraFar = farPlane;
-                                 }
-                                 else
-                                 {
-                                     rcasConstants.CameraNear = Config::Instance()->FsrCameraNear.value_or_default();
-                                     rcasConstants.CameraFar = Config::Instance()->FsrCameraFar.value_or_default();
-                                 }
+                  // We need camera near and far for DLSSD
+                  // We passthrough those values from the DLSSG params onto the upscaler's params
+                  if (InParameters->Get("DLSSG.CameraNear", &nearPlane) == NVSDK_NGX_Result_Success &&
+                      InParameters->Get("DLSSG.CameraFar", &farPlane) == NVSDK_NGX_Result_Success)
+                  {
+                      rcasConstants.CameraNear = nearPlane;
+                      rcasConstants.CameraFar = farPlane;
+                  }
+                  else
+                  {
+                      rcasConstants.CameraNear = Config::Instance()->FsrCameraNear.value_or_default();
+                      rcasConstants.CameraFar = Config::Instance()->FsrCameraFar.value_or_default();
+                  }
 
-                                 if (!RCAS->Dispatch(Device, DeviceContext, (ID3D11Texture2D*) input,
-                                                     (ID3D11Texture2D*) paramMotion, rcasConstants,
-                                                     (ID3D11Texture2D*) output, (ID3D11Texture2D*) paramDepth))
-                                 {
-                                     Config::Instance()->RcasEnabled.set_volatile_value(false);
-                                     return false;
-                                 }
-                                 return true;
-                             } });
+                  if (!RCAS->Dispatch(Device, InDeviceContext, (ID3D11Texture2D*) input, (ID3D11Texture2D*) paramMotion,
+                                      rcasConstants, (ID3D11Texture2D*) output, (ID3D11Texture2D*) paramDepth))
+                  {
+                      Config::Instance()->RcasEnabled.set_volatile_value(false);
+                      return false;
+                  }
+                  return true;
+              } });
     }
 
     if (Magnifier->ShouldRun())
@@ -243,7 +242,9 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Param
         pipeline.push_back({ // Setup
                              [&](ID3D11Resource* nextOutput) -> ID3D11Resource*
                              {
-                                 if (Magnifier->CreateBufferResource(Device, nextOutput))
+                                 // Same checks as Dispatch, a skipped pass must not take over the output
+                                 if (paramMotion && paramOutput &&
+                                     Magnifier->CreateBufferResource(Device, nextOutput) && Magnifier->CanRender())
                                      return Magnifier->Buffer();
 
                                  return nullptr;
@@ -255,10 +256,15 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Param
                                  if (!Magnifier->CanRender() || !paramMotion || !paramOutput)
                                      return true;
 
-                                 return Magnifier->Dispatch(Device, DeviceContext, (ID3D11Texture2D*) input,
+                                 return Magnifier->Dispatch(Device, InDeviceContext, (ID3D11Texture2D*) input,
                                                             (ID3D11Texture2D*) output);
                              } });
     }
+
+    // RCAS setup and DLSS zero the game's sharpness, restored after EvaluateInternal
+    float originalSharpness = 0.0f;
+    bool hasSharpness =
+        InParameters->Get(NVSDK_NGX_Parameter_Sharpness, &originalSharpness) == NVSDK_NGX_Result_Success;
 
     // Iterate BACKWARDS to establish where each shader needs to pull its input from
     ID3D11Resource* currentTarget = paramOutput;
@@ -276,14 +282,21 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Param
     // Upscaler will write to the first active shader, or just output
     InParameters->Set(NVSDK_NGX_Parameter_Output, currentTarget);
 
-    UpscalerTime->Start(DeviceContext);
+    UpscalerTime->Start(InDeviceContext);
 
-    auto evalResult = EvaluateInternal(DeviceContext, InParameters);
+    auto evalResult = EvaluateInternal(InDeviceContext, InParameters);
 
-    UpscalerTime->End(DeviceContext);
+    UpscalerTime->End(InDeviceContext);
+
+    InParameters->Set(NVSDK_NGX_Parameter_Output, paramOutput);
+
+    if (hasSharpness)
+        InParameters->Set(NVSDK_NGX_Parameter_Sharpness, originalSharpness);
 
     if (!evalResult)
-        return false;
+        result = false;
+
+    bool pipelineFailed = false;
 
     // Iterate FORWARDS to execute the shaders in the defined order
     for (auto& pass : pipeline)
@@ -292,13 +305,14 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Param
         {
             if (!pass.Dispatch(pass.inputBuffer, pass.outputBuffer))
             {
-                return true;
+                pipelineFailed = true;
+                break;
             }
         }
     }
 
     // imgui
-    if (!Config::Instance()->OverlayMenu.value_or_default() && _frameCount > 30)
+    if (!pipelineFailed && !Config::Instance()->OverlayMenu.value_or_default() && _frameCount > 30)
     {
         if (Imgui != nullptr && Imgui.get() != nullptr)
         {
@@ -307,7 +321,7 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Param
                 Imgui.reset();
             }
             else
-                Imgui->Render(DeviceContext, paramOutput);
+                Imgui->Render(InDeviceContext, paramOutput);
         }
         else
         {
@@ -316,42 +330,43 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* DeviceContext, NVSDK_NGX_Param
         }
     }
 
-    InParameters->Set(NVSDK_NGX_Parameter_Output, paramOutput);
-
     // restore compute shader resources
     for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT; i++)
     {
-        if (restoreSRVs[i] != nullptr)
-            DeviceContext->CSSetShaderResources(i, 1, &restoreSRVs[i]);
+        auto raw = restoreSRVs[i].Get();
+        InDeviceContext->CSSetShaderResources(i, 1, &raw);
     }
 
     for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
     {
-        if (restoreSamplerStates[i] != nullptr)
-            DeviceContext->CSSetSamplers(i, 1, &restoreSamplerStates[i]);
+        auto raw = restoreSamplerStates[i].Get();
+        InDeviceContext->CSSetSamplers(i, 1, &raw);
     }
 
     for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
     {
-        if (restoreCBVs[i] != nullptr)
-            DeviceContext->CSSetConstantBuffers(i, 1, &restoreCBVs[i]);
+        auto raw = restoreCBVs[i].Get();
+        InDeviceContext->CSSetConstantBuffers(i, 1, &raw);
     }
 
     for (UINT i = 0; i < D3D11_1_UAV_SLOT_COUNT; i++)
     {
-        if (restoreUAVs[i] != nullptr)
-            DeviceContext->CSSetUnorderedAccessViews(i, 1, &restoreUAVs[i], 0);
+        auto raw = restoreUAVs[i].Get();
+        InDeviceContext->CSSetUnorderedAccessViews(i, 1, &raw, 0);
     }
 
-    DeviceContext->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, restoreRTVs, restoreDSV);
+    InDeviceContext->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rawRTVs, restoreDSV.Get());
 
     _frameCount++;
 
-    return evalResult;
+    return result;
 }
 
 std::optional<double> IFeature_Dx11::ReadUpscalerTime(void* deviceContextVoid)
 {
+    if (!UpscalerTime || !RCAS || !OutputScaler)
+        return std::nullopt;
+
     auto* deviceContext = (ID3D11DeviceContext*) deviceContextVoid;
 
     lastUpscalerTime = UpscalerTime->ReadGpuTime(deviceContext);

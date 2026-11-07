@@ -88,10 +88,10 @@ void RenderMenu(Config* config, float menuResScale)
 {
 
     // DLSS Neural Rendering -----------------------------
-    ImGui::Spacing();
-    if (auto ch = ScopedCollapsingHeader("DLSS Neural Rendering"); ch.IsHeaderOpen())
+    if (ScopedCard::Shows("dlssnr"))
     {
-        ScopedIndent indent {};
+        ScopedCard card { "DLSS Neural Rendering" };
+        ScopedID sectionId { "DLSS Neural Rendering" };
         ImGui::Spacing();
 
         bool enabled = config->DlssNrEnabled.value_or_default();

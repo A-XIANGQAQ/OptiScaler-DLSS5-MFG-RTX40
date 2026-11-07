@@ -5,14 +5,13 @@
 #include "Streamline_Hooks.h"
 #include "LibraryLoad_Hooks.h"
 
-#include <fsr4/FSR4ModelSelection.h>
-
 #include <Util.h>
 #include <State.h>
 #include <Config.h>
 
 #include <cwctype>
 #include <misc/IdentifyGpu.h>
+#include <fsr4/FSR4DriverProvider.h>
 
 #include "Hook_Utils.h"
 
@@ -51,11 +50,31 @@ static inline bool IsInsideWindowsDirectory(const std::string& path)
     return false;
 }
 
+static inline bool IsDataFileLoad(DWORD dwFlags)
+{
+    return (dwFlags &
+            (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) != 0;
+}
+
+// Kernel32 loads end up in the hooked KernelBase ones, the same load is checked only once
+static thread_local const std::wstring* _checkedName = nullptr;
+
+struct CheckedLoadScope
+{
+    const std::wstring* _previous;
+
+    explicit CheckedLoadScope(const std::wstring& name) : _previous(_checkedName) { _checkedName = &name; }
+    ~CheckedLoadScope() { _checkedName = _previous; }
+};
+
 static inline HMODULE CheckLoad(const std::wstring& name)
 {
     do
     {
         if (State::Instance().isShuttingDown || LibraryLoadHooks::IsApiSetName(name))
+            break;
+
+        if (_checkedName != nullptr && *_checkedName == name)
             break;
 
         if (State::SkipDllChecks())
@@ -74,7 +93,10 @@ static inline HMODULE CheckLoad(const std::wstring& name)
 
         // skip loading of dll
         if (moduleHandle == (HMODULE) 1337)
-            break;
+        {
+            SetLastError(ERROR_MOD_NOT_FOUND);
+            return moduleHandle;
+        }
 
         if (moduleHandle != nullptr)
         {
@@ -184,6 +206,16 @@ HMODULE WINAPI KernelHooks::hk_K32_GetModuleHandleW(LPCWSTR lpModuleName)
 
             return original;
         }
+
+        // The driver dlls only hand out their providers when they see signed FFX SDK dlls loaded,
+        // when Opti uses its own FFX dlls the driver dll stands in for them
+        if (_wcsnicmp(lpModuleName, L"amd_fidelityfx_", 15) == 0)
+        {
+            if (auto original = o_K32_GetModuleHandleW(lpModuleName); original != nullptr)
+                return original;
+
+            return FSR4DriverDll::SdkModuleStandIn(lpModuleName, Util::GetCallerModule(_ReturnAddress()));
+        }
     }
 
     return o_K32_GetModuleHandleW(lpModuleName);
@@ -209,7 +241,14 @@ BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExW(DWORD dwFlags, LPCWSTR lpModu
     {
         LOG_TRACE("Suspected SpecialK call for nvapi64");
         *phModule = LibraryLoadHooks::LoadNvApi();
-        return true;
+
+        if (*phModule == nullptr)
+        {
+            SetLastError(ERROR_MOD_NOT_FOUND);
+            return FALSE;
+        }
+
+        return TRUE;
     }
 
     return o_K32_GetModuleHandleExW(dwFlags, lpModuleName, phModule);
@@ -338,8 +377,9 @@ HMODULE KernelHooks::hk_K32_LoadLibraryW(LPCWSTR lpLibFileName)
     auto result = CheckLoad(name);
 
     if (result != nullptr)
-        return result;
+        return result != (HMODULE) 1337 ? result : nullptr;
 
+    CheckedLoadScope scope(name);
     return o_K32_LoadLibraryW(lpLibFileName);
 }
 
@@ -359,8 +399,9 @@ HMODULE KernelHooks::hk_K32_LoadLibraryA(LPCSTR lpLibFileName)
     auto result = CheckLoad(name);
 
     if (result != nullptr)
-        return result;
+        return result != (HMODULE) 1337 ? result : nullptr;
 
+    CheckedLoadScope scope(name);
     return o_K32_LoadLibraryA(lpLibFileName);
 }
 
@@ -369,6 +410,9 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, 
 {
     if (lpLibFileName == nullptr)
         return NULL;
+
+    if (IsDataFileLoad(dwFlags))
+        return o_K32_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
 
     std::wstring name(lpLibFileName);
 
@@ -379,8 +423,9 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, 
     auto result = CheckLoad(name);
 
     if (result != nullptr)
-        return result;
+        return result != (HMODULE) 1337 ? result : nullptr;
 
+    CheckedLoadScope scope(name);
     return o_K32_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
 }
 
@@ -389,6 +434,9 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, D
 {
     if (lpLibFileName == nullptr)
         return NULL;
+
+    if (IsDataFileLoad(dwFlags))
+        return o_K32_LoadLibraryExA(lpLibFileName, hFile, dwFlags);
 
     std::string nameA(lpLibFileName);
     std::wstring name = string_to_wstring(nameA);
@@ -400,8 +448,9 @@ HMODULE KernelHooks::hk_K32_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, D
     auto result = CheckLoad(name);
 
     if (result != nullptr)
-        return result;
+        return result != (HMODULE) 1337 ? result : nullptr;
 
+    CheckedLoadScope scope(name);
     return o_K32_LoadLibraryExA(lpLibFileName, hFile, dwFlags);
 }
 
@@ -410,6 +459,9 @@ HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, D
 {
     if (lpLibFileName == nullptr)
         return NULL;
+
+    if (IsDataFileLoad(dwFlags))
+        return o_KB_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
 
     std::wstring name(lpLibFileName);
 
@@ -420,8 +472,9 @@ HMODULE KernelHooks::hk_KB_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, D
     auto result = CheckLoad(name);
 
     if (result != nullptr)
-        return result;
+        return result != (HMODULE) 1337 ? result : nullptr;
 
+    CheckedLoadScope scope(name);
     return o_KB_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
 }
 
@@ -429,7 +482,10 @@ VALIDATE_HOOK(hk_K32_FreeLibrary, Kernel32Proxy::PFN_FreeLibrary)
 BOOL KernelHooks::hk_K32_FreeLibrary(HMODULE lpLibrary)
 {
     if (lpLibrary == nullptr)
-        return STATUS_INVALID_PARAMETER;
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
 
 #ifdef _DEBUG
     // LOG_TRACE("{:X}", (size_t) lpLibrary);
@@ -443,5 +499,9 @@ BOOL KernelHooks::hk_K32_FreeLibrary(HMODULE lpLibrary)
             return result.value() == TRUE;
     }
 
-    return o_K32_FreeLibrary(lpLibrary);
+    auto freeResult = o_K32_FreeLibrary(lpLibrary);
+
+    LibraryLoadHooks::AfterFreeLibrary(lpLibrary);
+
+    return freeResult;
 }
