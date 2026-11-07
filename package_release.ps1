@@ -125,8 +125,8 @@ if ($missing.Count -gt 0) {
 # nvngx_dlssnr.dll is NVIDIA's, and the customary thing is to not redistribute it. This build ships it
 # anyway, deliberately: it is the whole point of the release, the version that ships here (310.9.16) is
 # not obtainable any other way without trawling other people's archives, and every downstream project
-# in this chain tells its users to go find it themselves. The file is unmodified, carries NVIDIA's
-# valid Authenticode signature, and is named exactly what the loader expects.
+# in this chain tells its users to go find it themselves. Either NVIDIA's signed build or an
+# openNR compat-fp16 rebuild is accepted, and the manifest names which one it is.
 #
 # Override the location with -ModelPath, or -NoModel for a package without it.
 $model = $null
@@ -232,17 +232,36 @@ if ($on) {
 Write-Host "ini verified: nothing switched on by default"
 
 # A checksum file, so nobody has to trust the release notes for the one number that matters.
+#
+# Two kinds of file can land here and they are not interchangeable:
+#   - NVIDIA's own signed build: only runs on Blackwell (the cubins are sm_120 only).
+#   - openNR's compat-fp16 rebuild: runs on RTX 20/30/40/50, unsigned.
+# Say which one this is instead of asserting "unmodified" for both.
 if ($model) {
-    $mh = (Get-FileHash "$stage\nvngx_dlssnr.dll" -Algorithm SHA256).Hash
-    $fv = (Get-Item "$stage\nvngx_dlssnr.dll").VersionInfo.FileVersion
+    $mh  = (Get-FileHash "$stage\nvngx_dlssnr.dll" -Algorithm SHA256).Hash
+    $mi  = Get-Item "$stage\nvngx_dlssnr.dll"
+    $fv  = $mi.VersionInfo.FileVersion
+    $sig = Get-AuthenticodeSignature $mi.FullName
+    $signed = ($sig.Status -eq 'Valid') -and ($sig.SignerCertificate.Subject -like '*NVIDIA*')
+
+    if ($signed) {
+        $origin = "NVIDIA signed build, unmodified"
+        $cards  = "RTX 50 only (embedded cubins are sm_120)"
+    } else {
+        $origin = "openNR compat-fp16 rebuild, unsigned"
+        $cards  = "RTX 20 / 30 / 40 / 50"
+    }
+
     @(
         "nvngx_dlssnr.dll",
         "  version  $fv",
-        "  size     $((Get-Item "$stage\nvngx_dlssnr.dll").Length) bytes",
+        "  size     $($mi.Length) bytes",
         "  sha256   $mh",
-        "",
-        "This is NVIDIA's file, unmodified. The signature on it is NVIDIA's own."
+        "  origin   $origin",
+        "  runs on  $cards"
     ) | Set-Content "$stage\nvngx_dlssnr.sha256.txt" -Encoding utf8
+
+    Write-Host ("model: {0}" -f $(if ($signed) { "NVIDIA signed (RTX 50 only)" } else { "openNR compat-fp16 (RTX 20-50)" }))
 }
 
 if (Test-Path $zip) { Remove-Item $zip -Force }
