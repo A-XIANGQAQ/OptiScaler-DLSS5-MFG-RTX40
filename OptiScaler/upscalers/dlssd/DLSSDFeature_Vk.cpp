@@ -19,11 +19,11 @@ bool DLSSDFeatureVk::InitInternal(VkCommandBuffer InCmdList, NVSDK_NGX_Parameter
 
     do
     {
-        if (!_dlssdInitedVk)
+        if (!_dlssdInited)
         {
-            _dlssdInitedVk = NVNGXProxy::InitVulkan(Instance, PhysicalDevice, Device, GIPA, GDPA);
+            _dlssdInited = NVNGXProxy::InitVulkan(Instance, PhysicalDevice, Device, GIPA, GDPA);
 
-            if (!_dlssdInitedVk)
+            if (!_dlssdInited)
                 return false;
 
             _moduleLoaded =
